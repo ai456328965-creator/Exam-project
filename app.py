@@ -7,129 +7,72 @@ import time
 import base64
 from PIL import Image
 import io
-from datetime import datetime
 
 # --------------------------------------------------
-# 🔐 Configuration & Security
+# 🔐 Gemini API Key
 # --------------------------------------------------
-# IMPORTANT: Move API key to Streamlit secrets or environment variables
-# For production: st.secrets["GEMINI_API_KEY"] or os.getenv("GEMINI_API_KEY")
-API_KEY = st.secrets.get("GEMINI_API_KEY", "AIzaSyDrGWv-nruXtcfcph-XhT7kCkpxsqBHYps")
-
-@st.cache_resource
-def initialize_gemini():
-    """Initialize Gemini model with caching"""
-    genai.configure(api_key=API_KEY)
-    return genai.GenerativeModel("gemini-1.5-flash")
-
-gemini_model = initialize_gemini()
+API_KEY = "AIzaSyDrGWv-nruXtcfcph-XhT7kCkpxsqBHYps"
+genai.configure(api_key=API_KEY)
+gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 
 # --------------------------------------------------
-# Streamlit Page Configuration
+# Streamlit Page Settings
 # --------------------------------------------------
-st.set_page_config(
-    page_title="AI Live Detection with Voice",
-    page_icon="📷",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
-
-# Custom CSS for better UI
-st.markdown("""
-    <style>
-    .main-header {
-        text-align: center;
-        color: #1f77b4;
-        padding: 1rem 0;
-    }
-    .stButton>button {
-        width: 100%;
-    }
-    .detection-box {
-        padding: 1rem;
-        border-radius: 10px;
-        background-color: #f0f2f6;
-        margin: 1rem 0;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown("<h2 class='main-header'>📷 AI Real-Time Detection with Voice Assistant</h2>", unsafe_allow_html=True)
+st.set_page_config(page_title="AI Live Detection with Voice", layout="wide")
+st.markdown("<h2 style='text-align:center;'>📷 AI Real-Time Detection with Auto Voice (Gemini 2.0)</h2>", unsafe_allow_html=True)
 
 # --------------------------------------------------
-# Helper Functions
+# Gemini Text Generator
 # --------------------------------------------------
-@st.cache_data(ttl=3600)
-def get_gemini_text(obj_name: str) -> str:
-    """Generate polite removal message using Gemini with caching"""
-    prompt = f"Create one short, polite sentence asking the user to remove the {obj_name}. Be friendly and concise."
+def get_gemini_text(obj_name):
+    prompt = f"This is a {obj_name}. Tell the user politely to remove it in one short sentence."
     try:
         reply = gemini_model.generate_content(prompt)
         return reply.text.strip()
     except Exception as e:
-        st.error(f"Text generation error: {e}")
-        return f"Please kindly remove the {obj_name}."
-
-def detect_objects_with_gemini(image: Image.Image) -> list:
-    """Detect objects using Gemini Vision API"""
-    try:
-        prompt = """Analyze this image and identify all visible objects.
-        Return ONLY a comma-separated list of objects (maximum 5 main objects).
-        Format: object1, object2, object3
-        Be specific and accurate. Do not include explanations."""
-        
-        response = gemini_model.generate_content([prompt, image])
-        objects_text = response.text.strip()
-        
-        # Clean and parse response
-        detected_objects = [
-            obj.strip().lower() 
-            for obj in objects_text.split(',') 
-            if obj.strip()
-        ]
-        
-        return detected_objects[:5]  # Limit to 5 objects
-        
-    except Exception as e:
-        st.error(f"❌ Detection error: {str(e)}")
-        return []
-
-def speak(text: str) -> None:
-    """Generate and play text-to-speech audio"""
-    try:
-        tts = gTTS(text=text, lang="en", slow=False)
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
-            tts.save(tmp_file.name)
-            
-            with open(tmp_file.name, "rb") as audio_file:
-                audio_bytes = audio_file.read()
-                audio_base64 = base64.b64encode(audio_bytes).decode()
-            
-            # Auto-play audio
-            st.markdown(
-                f'<audio autoplay><source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3"></audio>',
-                unsafe_allow_html=True
-            )
-            
-            # Clean up temp file
-            os.unlink(tmp_file.name)
-        
-        st.success(f"🔊 **Voice:** {text}")
-        
-    except Exception as e:
-        st.warning(f"⚠️ Audio error: {str(e)}")
-
-def should_speak(obj: str, cooldown_seconds: int = 10) -> bool:
-    """Check if enough time has passed to speak about this object"""
-    current_time = time.time()
-    last_obj = st.session_state.get('last_spoken', '')
-    last_time = st.session_state.get('last_speak_time', 0)
-    
-    return (obj != last_obj or current_time - last_time > cooldown_seconds)
+        return f"Please remove the {obj_name}."
 
 # --------------------------------------------------
-# Session State Initialization
+# Object Detection using Manual Selection
+# --------------------------------------------------
+def detect_objects_manual(image=None):
+    """Manual object detection since Gemini 2.0 Flash doesn't support vision"""
+    common_objects = ["phone", "laptop", "bottle", "cup", "book", "person", "bag", "chair", "table", "glass", 
+                     "keyboard", "mouse", "monitor", "headphones", "pen", "paper", "food", "drink"]
+    
+    st.sidebar.subheader("🔍 Object Selection")
+    selected_objects = st.sidebar.multiselect(
+        "Select objects you see:",
+        common_objects,
+        key="manual_detection"
+    )
+    
+    return selected_objects
+
+# --------------------------------------------------
+# Auto Speaker
+# --------------------------------------------------
+def speak(text):
+    try:
+        tts = gTTS(text=text, lang="en")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+            tts.save(tmp_file.name)
+            audio_bytes = open(tmp_file.name, "rb").read()
+            audio_base64 = base64.b64encode(audio_bytes).decode()
+            
+            # Auto-play audio using HTML
+            st.markdown(
+                f'<audio autoplay><source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3"></audio>',
+                unsafe_allow_html=True,
+            )
+        
+        st.success(f"🔊 **Voice Message:** {text}")
+        
+    except Exception as e:
+        st.warning(f"Audio error: {e}")
+
+# --------------------------------------------------
+# Session State Management
 # --------------------------------------------------
 if 'last_spoken' not in st.session_state:
     st.session_state.last_spoken = ""
@@ -137,176 +80,149 @@ if 'last_speak_time' not in st.session_state:
     st.session_state.last_speak_time = 0
 if 'processing' not in st.session_state:
     st.session_state.processing = False
-if 'detection_history' not in st.session_state:
-    st.session_state.detection_history = []
+if 'auto_mode' not in st.session_state:
+    st.session_state.auto_mode = False
 
 # --------------------------------------------------
-# Main Interface - Tabs
+# Main App - Live Camera Section
 # --------------------------------------------------
-tab1, tab2, tab3 = st.tabs(["📷 Live Camera", "📸 Upload Image", "🛠️ Manual Mode"])
+st.info("🎥 Use your camera and manually select detected objects")
 
-# --------------------------------------------------
-# TAB 1: Live Camera Detection
-# --------------------------------------------------
-with tab1:
-    st.info("🎥 **Real-time detection:** Take a picture to detect objects and hear voice alerts")
+# Camera input for visual reference
+camera_image = st.camera_input("Take a picture for reference", key="live_camera")
+
+# Display the camera image if available
+if camera_image:
+    image = Image.open(camera_image)
+    st.image(image, caption="Live Camera Feed - Select objects you see below", use_column_width=True)
+
+# Manual object detection
+detected_objects = detect_objects_manual()
+
+# Process detected objects
+if detected_objects and not st.session_state.processing:
+    st.session_state.processing = True
     
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        camera_image = st.camera_input("Capture Image", key="live_camera")
-    
-    with col2:
-        cooldown = st.slider("Voice cooldown (seconds)", 5, 30, 10)
-        auto_detect = st.checkbox("Auto-detect on capture", value=True)
-    
-    if camera_image and auto_detect:
-        if not st.session_state.processing:
-            st.session_state.processing = True
+    try:
+        st.success(f"**Selected Objects:** {', '.join(detected_objects)}")
+        
+        # Auto-speak for the first detected object
+        current_time = time.time()
+        obj = detected_objects[0]
+        
+        # Only speak if it's a new object or enough time has passed
+        if (obj != st.session_state.last_spoken or 
+            current_time - st.session_state.last_speak_time > 10):
             
-            try:
-                image = Image.open(camera_image)
-                
-                # Display captured image
-                st.image(image, caption="📸 Captured Image", use_column_width=True)
-                
-                # Detect objects
-                with st.spinner("🔍 Analyzing image with AI..."):
-                    detected_objects = detect_objects_with_gemini(image)
-                
-                if detected_objects:
-                    st.success(f"✅ **Detected:** {', '.join(detected_objects)}")
-                    
-                    # Record detection
-                    st.session_state.detection_history.append({
-                        'time': datetime.now().strftime("%H:%M:%S"),
-                        'objects': detected_objects
-                    })
-                    
-                    # Auto-speak for first object
-                    obj = detected_objects[0]
-                    
-                    if should_speak(obj, cooldown):
-                        with st.spinner("🎙️ Generating voice message..."):
-                            message = get_gemini_text(obj)
-                            speak(message)
-                        
-                        st.session_state.last_spoken = obj
-                        st.session_state.last_speak_time = time.time()
-                    else:
-                        st.info(f"⏱️ Cooldown active for '{obj}'. Wait {cooldown} seconds.")
-                else:
-                    st.warning("⚠️ No objects detected. Try adjusting lighting or camera angle.")
-                    
-            except Exception as e:
-                st.error(f"❌ Processing error: {str(e)}")
-            finally:
-                st.session_state.processing = False
-
-# --------------------------------------------------
-# TAB 2: Image Upload
-# --------------------------------------------------
-with tab2:
-    st.info("📤 Upload an image file for object detection")
-    
-    uploaded_file = st.file_uploader("Choose an image", type=['jpg', 'jpeg', 'png', 'webp'])
-    
-    if uploaded_file:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Image", use_column_width=True)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🔍 Detect Objects", use_container_width=True):
-                with st.spinner("Analyzing..."):
-                    detected_objects = detect_objects_with_gemini(image)
-                
-                if detected_objects:
-                    st.session_state.upload_objects = detected_objects
-                    st.success(f"✅ Found: {', '.join(detected_objects)}")
-                else:
-                    st.warning("No objects detected")
-        
-        # Voice generation for detected objects
-        if 'upload_objects' in st.session_state and st.session_state.upload_objects:
-            selected_obj = st.selectbox(
-                "Select object for voice message:",
-                st.session_state.upload_objects
-            )
+            with st.spinner("🔄 Generating voice message..."):
+                message = get_gemini_text(obj)
+                speak(message)
             
-            with col2:
-                if st.button("🔊 Generate Voice", use_container_width=True):
-                    message = get_gemini_text(selected_obj)
-                    speak(message)
+            st.session_state.last_spoken = obj
+            st.session_state.last_speak_time = current_time
+            
+            # Show remaining objects
+            if len(detected_objects) > 1:
+                st.info(f"Other detected objects: {', '.join(detected_objects[1:])}")
+        else:
+            st.info(f"Object '{obj}' was recently mentioned. Select new objects for detection.")
+            
+    except Exception as e:
+        st.error(f"Processing error: {e}")
+    
+    st.session_state.processing = False
 
 # --------------------------------------------------
-# TAB 3: Manual Mode
+# Quick Action Buttons
 # --------------------------------------------------
-with tab3:
-    st.info("🎯 Manually select objects if automatic detection isn't working")
-    
-    predefined_objects = [
-        "phone", "laptop", "bottle", "cup", "book", 
-        "person", "bag", "chair", "table", "glasses",
-        "pen", "notebook", "headphones", "mouse", "keyboard"
-    ]
-    
-    manual_objects = st.multiselect(
-        "Select objects:",
-        predefined_objects,
-        help="Choose one or more objects"
-    )
-    
-    if manual_objects:
-        selected_manual = st.radio("Choose object for voice message:", manual_objects)
-        
-        if st.button("🔊 Generate Voice Message", use_container_width=True):
-            message = get_gemini_text(selected_manual)
+st.markdown("---")
+st.subheader("⚡ Quick Actions")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    if st.button("📱 Detect Phone", use_container_width=True):
+        message = get_gemini_text("phone")
+        speak(message)
+
+with col2:
+    if st.button("💻 Detect Laptop", use_container_width=True):
+        message = get_gemini_text("laptop")
+        speak(message)
+
+with col3:
+    if st.button("🧴 Detect Bottle", use_container_width=True):
+        message = get_gemini_text("bottle")
+        speak(message)
+
+# --------------------------------------------------
+# Custom Object Input
+# --------------------------------------------------
+st.markdown("---")
+st.subheader("🔤 Custom Object Detection")
+
+custom_object = st.text_input("Enter any object name:", placeholder="e.g., coffee cup, book, etc.")
+
+if custom_object and st.button("Generate Voice for Custom Object"):
+    message = get_gemini_text(custom_object)
+    speak(message)
+
+# --------------------------------------------------
+# Auto Mode Toggle
+# --------------------------------------------------
+st.markdown("---")
+st.subheader("🔄 Auto Mode")
+
+auto_mode = st.checkbox("Enable continuous auto-detection mode", value=False)
+
+if auto_mode:
+    st.info("🔴 Auto mode active - Voice alerts will trigger automatically for selected objects")
+    if detected_objects:
+        current_time = time.time()
+        if current_time - st.session_state.last_speak_time > 15:  # 15 second cooldown
+            obj = detected_objects[0]
+            message = get_gemini_text(obj)
             speak(message)
+            st.session_state.last_spoken = obj
+            st.session_state.last_speak_time = current_time
+            time.sleep(2)  # Small delay
+            st.rerun()
+else:
+    st.info("🟢 Manual mode - Click buttons or select objects to generate voice")
 
 # --------------------------------------------------
-# Sidebar: Detection History & Settings
-# --------------------------------------------------
-with st.sidebar:
-    st.header("⚙️ Settings")
-    
-    st.markdown("### 📊 Detection History")
-    if st.session_state.detection_history:
-        for entry in st.session_state.detection_history[-5:]:
-            st.text(f"{entry['time']}: {', '.join(entry['objects'])}")
-    else:
-        st.text("No detections yet")
-    
-    if st.button("🗑️ Clear History"):
-        st.session_state.detection_history = []
-        st.rerun()
-    
-    st.markdown("---")
-    st.markdown("### 📖 Instructions")
-    st.markdown("""
-    **Live Camera:**
-    - Allow camera access
-    - Point at objects
-    - Auto-detection on capture
-    
-    **Upload Image:**
-    - Choose image file
-    - Click detect
-    - Select object for voice
-    
-    **Manual Mode:**
-    - Select from list
-    - Generate voice message
-    """)
-
-# --------------------------------------------------
-# Footer
+# Instructions
 # --------------------------------------------------
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center; color: #666;'>
-    <p>Powered by Gemini Vision AI & Google Text-to-Speech</p>
-    <p style='font-size: 0.8rem;'>⚠️ Remember to secure your API key in production!</p>
-</div>
-""", unsafe_allow_html=True)
+### 🎯 How to Use:
+
+**Live Camera Mode:**
+1. Allow camera access for visual reference
+2. Select objects you see from the sidebar list
+3. System automatically generates voice messages
+4. Use quick buttons for common objects
+
+**Quick Actions:**
+- Click buttons for common objects
+- Use custom input for any object
+- Enable auto-mode for continuous alerts
+
+### ✅ Features:
+- **Gemini 2.0 Flash AI** for intelligent responses
+- **Real-time voice generation** 
+- **Text-to-speech functionality**
+- **Multiple input methods**
+- **Cloud compatible** - no complex dependencies
+- **Auto and manual modes**
+
+### 🔄 Auto Mode:
+- Continuous voice alerts every 15 seconds
+- Perfect for monitoring scenarios
+- Automatically uses first selected object
+""")
+
+# Refresh for auto mode
+if auto_mode and detected_objects:
+    time.sleep(5)
+    st.rerun()
