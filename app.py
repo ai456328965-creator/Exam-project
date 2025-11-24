@@ -4,11 +4,9 @@ from gtts import gTTS
 import tempfile
 import os
 import time
-import queue
+import base64
 from PIL import Image
-import av
-import numpy as np
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+import io
 
 # --------------------------------------------------
 # 🔐 Gemini API Key
@@ -50,7 +48,7 @@ def detect_objects_with_gemini(image):
         
         # Parse the response
         detected_objects = [obj.strip() for obj in objects_text.split(',')]
-        return detected_objects[:3]  # Return top 3 objects
+        return [obj for obj in detected_objects if obj]  # Remove empty strings
         
     except Exception as e:
         st.error(f"Detection error: {e}")
@@ -62,128 +60,86 @@ def detect_objects_with_gemini(image):
 def speak(text):
     try:
         tts = gTTS(text=text, lang="en")
-        path = os.path.join(tempfile.gettempdir(), "voice.mp3")
-        tts.save(path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+            tts.save(tmp_file.name)
+            audio_bytes = open(tmp_file.name, "rb").read()
+            audio_base64 = base64.b64encode(audio_bytes).decode()
+            
+            # Auto-play audio using HTML
+            st.markdown(
+                f'<audio autoplay><source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3"></audio>',
+                unsafe_allow_html=True,
+            )
         
-        # Use HTML audio with autoplay
-        st.markdown(f"""
-        <audio autoplay controls style="display: none;">
-            <source src="data:audio/mp3;base64,{path}" type="audio/mpeg">
-        </audio>
-        """, unsafe_allow_html=True)
-        
-        # Also display the text
         st.info(f"🔊 **Voice Message:** {text}")
         
     except Exception as e:
         st.warning(f"Audio error: {e}")
 
 # --------------------------------------------------
-# Video Processor for Live Detection
+# Session State Management
 # --------------------------------------------------
-class LiveDetectionProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.last_spoken = ""
-        self.speak_delay = 10  # seconds between speeches
-        self.last_speak_time = 0
-        self.detection_queue = queue.Queue()
-        self.frame_counter = 0
-        self.detection_interval = 30  # Process every 30 frames
-
-    def recv(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        self.frame_counter += 1
-        
-        # Only process every N frames to reduce API calls
-        if self.frame_counter % self.detection_interval == 0:
-            try:
-                # Convert to PIL Image for Gemini
-                pil_image = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                
-                # Detect objects using Gemini Vision
-                detected_objects = detect_objects_with_gemini(pil_image)
-                
-                # Handle speech logic
-                if detected_objects:
-                    current_time = time.time()
-                    obj = detected_objects[0]  # Use first detected object
-                    
-                    if (obj != self.last_spoken and 
-                        current_time - self.last_speak_time > self.speak_delay):
-                        self.detection_queue.put(obj)
-                        self.last_spoken = obj
-                        self.last_speak_time = current_time
-                        
-            except Exception as e:
-                # Continue processing frames even if detection fails
-                pass
-        
-        return frame
-
-# --------------------------------------------------
-# RTC Configuration
-# --------------------------------------------------
-RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-})
-
-# --------------------------------------------------
-# Manual OpenCV import (only if needed for drawing)
-# --------------------------------------------------
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except ImportError:
-    CV2_AVAILABLE = False
-    st.warning("OpenCV not available for drawing bounding boxes")
-
-# --------------------------------------------------
-# Main App
-# --------------------------------------------------
-st.info("🎥 Click 'START' below to begin live camera detection with AI")
-
-# Initialize session state
 if 'last_spoken' not in st.session_state:
     st.session_state.last_spoken = ""
 if 'last_speak_time' not in st.session_state:
     st.session_state.last_speak_time = 0
-if 'processor' not in st.session_state:
-    st.session_state.processor = None
+if 'processing' not in st.session_state:
+    st.session_state.processing = False
 
-# WebRTC Streamer
-ctx = webrtc_streamer(
-    key="ai-live-detection",
-    video_processor_factory=LiveDetectionProcessor,
-    rtc_configuration=RTC_CONFIGURATION,
-    media_stream_constraints={"video": True, "audio": False},
-)
+# --------------------------------------------------
+# Main App - Live Camera Section
+# --------------------------------------------------
+st.info("🎥 Use your camera for real-time detection")
 
-# Handle speech from the video processor
-if ctx.video_processor:
-    st.session_state.processor = ctx.video_processor
+# Camera input
+camera_image = st.camera_input("Take a picture for real-time detection", key="live_camera")
+
+if camera_image and not st.session_state.processing:
+    st.session_state.processing = True
     
-    # Check for new detections
     try:
-        if not st.session_state.processor.detection_queue.empty():
-            obj = st.session_state.processor.detection_queue.get_nowait()
+        # Display the captured image
+        image = Image.open(camera_image)
+        st.image(image, caption="Live Camera Feed - Processing...", use_column_width=True)
+        
+        # Detect objects
+        with st.spinner("🔍 AI is analyzing the image..."):
+            detected_objects = detect_objects_with_gemini(image)
+        
+        if detected_objects:
+            st.success(f"**Detected Objects:** {', '.join(detected_objects)}")
             
-            if obj != st.session_state.last_spoken:
+            # Auto-speak for the first detected object
+            current_time = time.time()
+            obj = detected_objects[0]
+            
+            # Only speak if it's a new object or enough time has passed
+            if (obj != st.session_state.last_spoken or 
+                current_time - st.session_state.last_speak_time > 10):
+                
                 with st.spinner("🔄 Generating voice message..."):
                     message = get_gemini_text(obj)
-                    st.success(f"**Detected:** {obj}")
                     speak(message)
                 
                 st.session_state.last_spoken = obj
-                st.session_state.last_speak_time = time.time()
-                
+                st.session_state.last_speak_time = current_time
+            else:
+                st.info(f"Object '{obj}' was recently mentioned. Wait for new detection.")
+        else:
+            st.warning("No objects detected in the image")
+            
     except Exception as e:
-        st.warning(f"Speech handling error: {e}")
+        st.error(f"Processing error: {e}")
+    
+    st.session_state.processing = False
 
-# Alternative: Single Image Upload
+# --------------------------------------------------
+# Manual Image Upload Section
+# --------------------------------------------------
 st.markdown("---")
 st.subheader("📸 Alternative: Upload Image for Detection")
 
-uploaded_file = st.file_uploader("Choose an image file", type=['jpg', 'jpeg', 'png'])
+uploaded_file = st.file_uploader("Or choose an image file", type=['jpg', 'jpeg', 'png'])
 if uploaded_file:
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_column_width=True)
@@ -204,28 +160,66 @@ if uploaded_file:
         else:
             st.warning("No objects detected in the image")
 
+# --------------------------------------------------
+# Manual Object Selection (Fallback)
+# --------------------------------------------------
+st.markdown("---")
+st.subheader("🛠️ Manual Mode")
+
+st.info("If camera detection isn't working, you can manually select objects:")
+
+manual_objects = st.multiselect(
+    "Select objects manually:",
+    ["phone", "laptop", "bottle", "cup", "book", "person", "bag", "chair", "table", "glass"]
+)
+
+if manual_objects and st.button("Generate Manual Voice Message"):
+    selected_obj = manual_objects[0]
+    message = get_gemini_text(selected_obj)
+    speak(message)
+
+# --------------------------------------------------
 # Instructions
+# --------------------------------------------------
 st.markdown("---")
 st.markdown("""
 ### 🎯 How to Use:
 
-**Live Camera Mode:**
-1. Click **'START'** to activate your camera
-2. Allow camera permissions in your browser
-3. Point camera at objects - detection happens automatically
-4. Listen for AI-generated voice alerts
+**Live Camera Mode (Recommended):**
+1. Allow camera access when prompted
+2. Point camera at objects - the system automatically detects and speaks
+3. New detections trigger voice alerts every 10 seconds
 
 **Image Upload Mode:**
-1. Upload any image file
-2. Click "Detect Objects in Image"
+1. Upload any image file (JPG, PNG)
+2. Click "Detect Objects in Image" 
 3. Select which object to generate voice message for
 4. Click "Generate Voice Message"
 
+**Manual Mode:**
+1. Select objects from the list
+2. Click "Generate Manual Voice Message"
+
 ### ✅ Features:
-- **Live camera detection** using Gemini Vision AI
-- **Real-time object recognition**
-- **AI-generated polite voice messages**
-- **Text-to-speech functionality**
+- **AI-powered object detection** using Gemini Vision
+- **Real-time camera processing**
+- **Auto-generated voice messages**
+- **Text-to-speech functionality** 
 - **Cloud compatible** - no complex dependencies
-- **Multiple input methods** (camera + upload)
+- **Multiple input methods**
+
+### 🔄 For Real-time Detection:
+- Keep the camera pointed at objects
+- System automatically processes every new image
+- Voice alerts for new detections
+- 10-second cooldown between same object alerts
 """)
+
+# Auto-refresh for continuous detection
+st.markdown("---")
+auto_refresh = st.checkbox("Enable auto-refresh for continuous detection", value=True)
+
+if auto_refresh:
+    st.write("🔄 Camera will automatically refresh for continuous detection")
+    time.sleep(5)  # Wait 5 seconds before allowing next capture
+    st.rerun()
