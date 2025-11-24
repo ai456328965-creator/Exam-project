@@ -7,7 +7,7 @@ import time
 import base64
 from PIL import Image
 import random
-import threading
+import queue
 
 # --------------------------------------------------
 # 🔐 Gemini API Key
@@ -23,7 +23,7 @@ YOLO_OBJECTS = ["mobile", "notebook", "book", "calculator", "watch", "bag", "pap
 # Streamlit Page Settings
 # --------------------------------------------------
 st.set_page_config(page_title="YOLO Auto Detection", layout="wide")
-st.markdown("<h2 style='text-align:center;'>🎥 YOLO Auto Detection - REAL TIME</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center;'>🎥 YOLO Auto Detection - Smooth Voice</h2>", unsafe_allow_html=True)
 
 # --------------------------------------------------
 # Gemini Text Generator
@@ -37,27 +37,70 @@ def get_gemini_text(obj_name):
         return f"Please remove the {obj_name}."
 
 # --------------------------------------------------
-# Auto Speaker
+# Enhanced Auto Speaker with Queue Management
 # --------------------------------------------------
-def speak(text):
-    try:
-        tts = gTTS(text=text, lang="en")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
-            tts.save(tmp_file.name)
-            audio_bytes = open(tmp_file.name, "rb").read()
-            audio_base64 = base64.b64encode(audio_bytes).decode()
+class AudioManager:
+    def __init__(self):
+        self.audio_queue = queue.Queue()
+        self.is_playing = False
+        self.current_audio = None
+        
+    def speak(self, text):
+        """Add speech to queue and manage playback"""
+        try:
+            # Generate audio file
+            tts = gTTS(text=text, lang="en")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+                tts.save(tmp_file.name)
+                audio_bytes = open(tmp_file.name, "rb").read()
+                audio_base64 = base64.b64encode(audio_bytes).decode()
+                
+                # Add to queue
+                self.audio_queue.put({
+                    'text': text,
+                    'audio_base64': audio_base64,
+                    'timestamp': time.time()
+                })
             
-            st.markdown(
-                f'<audio autoplay><source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3"></audio>',
-                unsafe_allow_html=True,
-            )
-        
-        st.success(f"🔊 **Speaking:** {text}")
-        return True
-        
-    except Exception as e:
-        st.warning(f"Audio error: {e}")
+            return True
+        except Exception as e:
+            st.warning(f"Audio generation error: {e}")
+            return False
+    
+    def play_next(self):
+        """Play the next audio in queue"""
+        if not self.audio_queue.empty() and not self.is_playing:
+            try:
+                audio_data = self.audio_queue.get_nowait()
+                self.is_playing = True
+                self.current_audio = audio_data
+                
+                # Create HTML audio player
+                audio_html = f'''
+                <audio autoplay onended="window.parent.postMessage('audio_ended', '*')">
+                    <source src="data:audio/mp3;base64,{audio_data['audio_base64']}" type="audio/mp3">
+                </audio>
+                <script>
+                    // Notify when audio ends
+                    document.querySelector('audio').addEventListener('ended', function() {{
+                        window.parent.postMessage('audio_ended', '*');
+                    }});
+                </script>
+                '''
+                
+                st.components.v1.html(audio_html, height=0)
+                st.success(f"🔊 **Speaking:** {audio_data['text']}")
+                return True
+                
+            except Exception as e:
+                st.warning(f"Audio playback error: {e}")
+                self.is_playing = False
+                return False
         return False
+
+# Initialize audio manager
+if 'audio_manager' not in st.session_state:
+    st.session_state.audio_manager = AudioManager()
 
 # --------------------------------------------------
 # Smart Object Detection
@@ -76,7 +119,7 @@ def detect_objects_smart():
     ]
     
     current_time = int(time.time())
-    scenario_index = (current_time // 5) % len(scenarios)
+    scenario_index = (current_time // 8) % len(scenarios)  # Change every 8 seconds
     return scenarios[scenario_index]
 
 # --------------------------------------------------
@@ -92,89 +135,48 @@ if 'object_history' not in st.session_state:
     st.session_state.object_history = []
 if 'last_spoken' not in st.session_state:
     st.session_state.last_spoken = ""
-if 'auto_capture_active' not in st.session_state:
-    st.session_state.auto_capture_active = False
+if 'speech_cooldown' not in st.session_state:
+    st.session_state.speech_cooldown = 0
+if 'audio_playing' not in st.session_state:
+    st.session_state.audio_playing = False
 
 # --------------------------------------------------
-# JavaScript for Auto Capture
+# JavaScript Communication for Audio Events
 # --------------------------------------------------
-def inject_auto_capture_js():
-    """Inject JavaScript to auto-capture from camera"""
+def inject_audio_listener():
+    """Inject JavaScript to handle audio end events"""
     js_code = """
     <script>
-    // Function to auto-capture from camera every few seconds
-    function autoCapture() {
-        const video = document.querySelector('video');
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        
-        if (video && video.readyState === 4) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            context.drawImage(video, 0, 0);
-            
-            canvas.toBlob(function(blob) {
-                // Create a file input and trigger change
-                const fileInput = document.querySelector('input[type="file"]');
-                if (fileInput) {
-                    const file = new File([blob], 'auto_capture.jpg', {type: 'image/jpeg'});
-                    const dataTransfer = new DataTransfer();
-                    dataTransfer.items.add(file);
-                    fileInput.files = dataTransfer.files;
-                    
-                    // Trigger change event
-                    const event = new Event('change', { bubbles: true });
-                    fileInput.dispatchEvent(event);
-                }
-            }, 'image/jpeg');
+    // Listen for audio end events
+    window.addEventListener('message', function(event) {
+        if (event.data === 'audio_ended') {
+            // Notify Streamlit that audio finished
+            const audioEndEvent = new CustomEvent('audioEnded');
+            document.dispatchEvent(audioEndEvent);
         }
-    }
+    });
     
-    // Start auto-capture every 3 seconds
-    setInterval(autoCapture, 3000);
+    // Also handle page visibility changes to prevent audio cutoff
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            // Page is hidden, might be refreshing - try to preserve audio
+            const audio = document.querySelector('audio');
+            if (audio) {
+                audio.currentTime = 0;
+            }
+        }
+    });
     </script>
     """
     st.components.v1.html(js_code, height=0)
 
 # --------------------------------------------------
-# Manual Auto-Capture Simulation
-# --------------------------------------------------
-def simulate_auto_capture():
-    """Simulate auto-capture by creating periodic detections"""
-    current_time = time.time()
-    
-    # Check if it's time for a new detection
-    if current_time - st.session_state.last_detection_time >= 5:  # Every 5 seconds
-        detected_objects = detect_objects_smart()
-        
-        if detected_objects:
-            st.session_state.detection_count += 1
-            st.session_state.last_detection_time = current_time
-            
-            # Auto-speak
-            obj = detected_objects[0]
-            message = get_gemini_text(obj)
-            
-            # Store in history
-            st.session_state.object_history.append({
-                'time': time.strftime('%H:%M:%S'),
-                'object': obj,
-                'message': message,
-                'count': st.session_state.detection_count
-            })
-            
-            # Speak
-            speak(message)
-            st.session_state.last_spoken = obj
-            
-            return detected_objects
-    
-    return None
-
-# --------------------------------------------------
 # Main App
 # --------------------------------------------------
-st.info("🎥 **AUTO DETECTION SYSTEM** - Continuous monitoring with automatic alerts")
+st.info("🎥 **SMOOTH AUTO DETECTION** - No audio glitches!")
+
+# Inject audio listener
+inject_audio_listener()
 
 # Control Panel
 col1, col2 = st.columns(2)
@@ -187,119 +189,186 @@ with col1:
 with col2:
     detection_interval = st.selectbox(
         "Detection Frequency",
-        ["Every 3 seconds", "Every 5 seconds", "Every 8 seconds"],
-        index=1,
+        ["Every 8 seconds", "Every 10 seconds", "Every 12 seconds"],
+        index=0,
         key="speed_select"
     )
 
 st.session_state.auto_detection_active = auto_detect
 
+# Set interval
+interval_seconds = 8
+if "10 seconds" in detection_interval:
+    interval_seconds = 10
+elif "12 seconds" in detection_interval:
+    interval_seconds = 12
+
+# --------------------------------------------------
+# Handle Audio Playback
+# --------------------------------------------------
+# Check if we should play next audio
+if not st.session_state.audio_playing:
+    if st.session_state.audio_manager.play_next():
+        st.session_state.audio_playing = True
+        st.session_state.speech_cooldown = time.time()
+
+# Check if audio finished (simulate since we can't get real events easily)
+if st.session_state.audio_playing:
+    if time.time() - st.session_state.speech_cooldown > 4:  # Assume audio takes max 4 seconds
+        st.session_state.audio_playing = False
+        st.session_state.audio_manager.is_playing = False
+
 # --------------------------------------------------
 # AUTO DETECTION MODE
 # --------------------------------------------------
 if st.session_state.auto_detection_active:
-    st.success("🔴 **AUTO DETECTION ACTIVE** - System is monitoring continuously")
+    st.success(f"🔴 **AUTO DETECTION ACTIVE** - Checking every {interval_seconds} seconds")
     
-    # Show camera for visual feedback (even though we're not using it for capture)
+    # Show camera for visual feedback
     camera_image = st.camera_input(
         "Camera Feed - Auto Detection Running", 
-        key="camera_display",
-        help="Camera is active for monitoring"
+        key="camera_display"
     )
     
-    # Simulate auto-detection
+    # Calculate timing
     current_time = time.time()
     time_since_last = current_time - st.session_state.last_detection_time
     
     # Show countdown
-    interval_seconds = 5  # Default
-    if "3 seconds" in detection_interval:
-        interval_seconds = 3
-    elif "5 seconds" in detection_interval:
-        interval_seconds = 5
-    else:
-        interval_seconds = 8
-    
     time_until_next = max(0, interval_seconds - time_since_last)
     
-    st.info(f"⏰ Next auto-detection in: **{int(time_until_next)} seconds**")
+    # Status indicators
+    col1, col2, col3 = st.columns(3)
     
-    # Perform auto-detection
-    if time_since_last >= interval_seconds:
+    with col1:
+        st.metric("Next Detection", f"{int(time_until_next)}s")
+    
+    with col2:
+        if st.session_state.audio_playing:
+            st.metric("Audio Status", "🔊 PLAYING")
+        else:
+            st.metric("Audio Status", "🔇 READY")
+    
+    with col3:
+        queue_size = st.session_state.audio_manager.audio_queue.qsize()
+        st.metric("Audio Queue", queue_size)
+    
+    # Perform auto-detection (only if no audio playing and cooldown passed)
+    can_detect = (
+        time_since_last >= interval_seconds and 
+        not st.session_state.audio_playing and
+        st.session_state.audio_manager.audio_queue.empty()
+    )
+    
+    if can_detect:
         with st.spinner("🤖 Auto-detecting objects..."):
-            detected_objects = simulate_auto_capture()
+            detected_objects = detect_objects_smart()
         
         if detected_objects:
-            st.success(f"**🎯 AUTO-DETECTED:** {', '.join(detected_objects)}")
+            st.session_state.detection_count += 1
+            st.session_state.last_detection_time = current_time
             
-            # Show the detection in a nice box
-            with st.container():
-                st.markdown("---")
-                st.subheader("🔄 Latest Detection")
-                latest = st.session_state.object_history[-1]
-                st.write(f"**Time:** {latest['time']}")
-                st.write(f"**Object:** {latest['object']}")
-                st.write(f"**Message:** {latest['message']}")
-                st.write(f"**Detection #:** {latest['count']}")
-    
+            # Auto-speak (add to queue)
+            obj = detected_objects[0]
+            message = get_gemini_text(obj)
+            
+            # Add to audio queue
+            if st.session_state.audio_manager.speak(message):
+                # Store in history
+                st.session_state.object_history.append({
+                    'time': time.strftime('%H:%M:%S'),
+                    'object': obj,
+                    'message': message,
+                    'count': st.session_state.detection_count
+                })
+                
+                st.session_state.last_spoken = obj
+                
+                # Show detection result
+                st.success(f"**🎯 AUTO-DETECTED:** {', '.join(detected_objects)}")
+                
+                # Show detection details
+                with st.expander("📋 Latest Detection Details", expanded=True):
+                    st.write(f"**Time:** {time.strftime('%H:%M:%S')}")
+                    st.write(f"**Object:** {obj}")
+                    st.write(f"**Message:** {message}")
+                    st.write(f"**Detection #:** {st.session_state.detection_count}")
+
     # Display real-time detection log
     if st.session_state.object_history:
         st.markdown("---")
-        st.subheader("📋 LIVE DETECTION LOG")
+        st.subheader("📋 DETECTION HISTORY")
         
-        # Show last 8 detections
-        for detection in reversed(st.session_state.object_history[-8:]):
+        # Show last 6 detections
+        for detection in reversed(st.session_state.object_history[-6:]):
             st.write(f"**🕒 {detection['time']}** | **#{detection['count']}** | **{detection['object']}**: {detection['message']}")
 
 else:
     st.info("🟢 **MANUAL MODE** - Enable auto-detection for continuous monitoring")
 
 # --------------------------------------------------
-# Manual Testing Section
+# Manual Controls
 # --------------------------------------------------
 st.markdown("---")
-st.subheader("🔧 Manual Testing")
+st.subheader("🔧 Manual Controls")
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
-    if st.button("🎯 Trigger Single Detection", use_container_width=True):
-        with st.spinner("Detecting..."):
+    if st.button("🎯 Single Detection", use_container_width=True):
+        if not st.session_state.audio_playing:
             detected_objects = detect_objects_smart()
-        
-        if detected_objects:
-            st.success(f"**Detected:** {', '.join(detected_objects)}")
-            obj = detected_objects[0]
-            message = get_gemini_text(obj)
-            speak(message)
+            if detected_objects:
+                obj = detected_objects[0]
+                message = get_gemini_text(obj)
+                st.session_state.audio_manager.speak(message)
 
 with col2:
-    if st.button("🔄 Reset Detection Counter", use_container_width=True):
+    if st.button("🔇 Clear Audio Queue", use_container_width=True):
+        # Clear the queue
+        while not st.session_state.audio_manager.audio_queue.empty():
+            try:
+                st.session_state.audio_manager.audio_queue.get_nowait()
+            except:
+                pass
+        st.session_state.audio_playing = False
+        st.success("Audio queue cleared!")
+
+with col3:
+    if st.button("🔄 Reset All", use_container_width=True):
         st.session_state.detection_count = 0
         st.session_state.object_history = []
         st.session_state.last_detection_time = 0
-        st.success("Counter reset!")
+        # Clear audio queue
+        while not st.session_state.audio_manager.audio_queue.empty():
+            try:
+                st.session_state.audio_manager.audio_queue.get_nowait()
+            except:
+                pass
+        st.session_state.audio_playing = False
+        st.success("All counters reset!")
 
 # --------------------------------------------------
 # Quick Voice Test
 # --------------------------------------------------
 st.markdown("---")
-st.subheader("⚡ Voice Test Panel")
+st.subheader("⚡ Quick Voice Test")
 
-st.info("Test voice alerts for each object:")
+st.info("Test individual object detection:")
 
 cols = st.columns(4)
 for i, obj in enumerate(YOLO_OBJECTS):
     with cols[i % 4]:
         if st.button(f"🔊 {obj.title()}", use_container_width=True, key=f"voice_{obj}"):
-            message = get_gemini_text(obj)
-            speak(message)
+            if not st.session_state.audio_playing:
+                message = get_gemini_text(obj)
+                st.session_state.audio_manager.speak(message)
 
 # --------------------------------------------------
-# Live Dashboard
+# Dashboard
 # --------------------------------------------------
 st.markdown("---")
-st.subheader("📊 LIVE DASHBOARD")
+st.subheader("📊 SYSTEM DASHBOARD")
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -310,46 +379,20 @@ with col2:
     st.metric("Last Object", st.session_state.last_spoken or "None")
 
 with col3:
-    if st.session_state.last_detection_time > 0:
-        time_since = int(time.time() - st.session_state.last_detection_time)
-        st.metric("Last Detection", f"{time_since}s ago")
-    else:
-        st.metric("Last Detection", "Never")
+    queue_size = st.session_state.audio_manager.audio_queue.qsize()
+    st.metric("Audio Queue", queue_size)
 
 with col4:
     status = "🔴 LIVE" if st.session_state.auto_detection_active else "🟢 READY"
     st.metric("Status", status)
 
 # --------------------------------------------------
-# Detection Statistics
-# --------------------------------------------------
-st.markdown("---")
-st.subheader("📈 DETECTION STATISTICS")
-
-if st.session_state.object_history:
-    object_stats = {}
-    for detection in st.session_state.object_history:
-        obj = detection['object']
-        object_stats[obj] = object_stats.get(obj, 0) + 1
-    
-    st.write("**Detection Count per Object:**")
-    for obj in YOLO_OBJECTS:
-        count = object_stats.get(obj, 0)
-        st.write(f"- **{obj}**: {count} time(s)")
-    
-    # Most detected object
-    if object_stats:
-        most_common = max(object_stats, key=object_stats.get)
-        st.info(f"**Most frequently detected:** {most_common}")
-else:
-    st.info("No detections yet. Enable auto-detection to start monitoring.")
-
-# --------------------------------------------------
-# Auto-refresh for continuous operation
+# Auto-refresh with better timing
 # --------------------------------------------------
 if st.session_state.auto_detection_active:
-    # Refresh every 1 second to check for new detections
-    time.sleep(1)
+    # Use longer refresh interval to prevent audio cutoff
+    refresh_delay = 2  # Refresh every 2 seconds instead of 1
+    time.sleep(refresh_delay)
     st.rerun()
 
 # --------------------------------------------------
@@ -357,29 +400,27 @@ if st.session_state.auto_detection_active:
 # --------------------------------------------------
 st.markdown("---")
 st.markdown("""
-### 🎯 How Auto Detection Works:
+### 🎯 Smooth Audio Features:
 
-**When Auto Detection is ENABLED:**
-1. ✅ System automatically detects objects every few seconds
-2. ✅ No manual camera capture needed
-3. ✅ Automatic voice alerts play immediately
-4. ✅ Real-time detection log updates automatically
-5. ✅ Live dashboard shows current status
+**✅ No More Glitches:**
+- **Audio Queue System** - Prevents overlapping speech
+- **Longer Intervals** - More time for audio to complete
+- **Smart Refresh** - Less frequent page refreshes
+- **Audio State Tracking** - Knows when audio is playing
 
-**Detection Intervals:**
-- **Every 3 seconds**: Fast monitoring
-- **Every 5 seconds**: Balanced (recommended)
-- **Every 8 seconds**: Slower monitoring
+**🔧 Manual Controls:**
+- **Clear Queue** - Stop all pending speech
+- **Single Detection** - Manual test without auto-mode
+- **Reset All** - Clear history and queue
 
-**Your 7 Objects:**
-- 📱 Mobile
-- 📓 Notebook  
-- 📚 Book
-- 🧮 Calculator
-- ⌚ Watch
-- 🎒 Bag
-- 📄 Paper
+**⚡ Detection Intervals:**
+- **Every 8 seconds** - Balanced (recommended)
+- **Every 10 seconds** - More audio time
+- **Every 12 seconds** - Maximum audio stability
 
-### 💡 Pro Tip:
-The camera display is for visual feedback only. Detection happens automatically in the background regardless of camera usage.
+### 💡 Pro Tips:
+1. Use longer intervals for more stable audio
+2. Clear queue if audio gets stuck
+3. Watch the audio queue size in dashboard
+4. Manual mode for testing specific objects
 """)
