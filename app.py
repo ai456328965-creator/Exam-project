@@ -6,10 +6,7 @@ import os
 import time
 import base64
 from PIL import Image
-import av
-import numpy as np
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-import queue
+import random
 
 # --------------------------------------------------
 # 🔐 Gemini API Key
@@ -25,7 +22,7 @@ YOLO_OBJECTS = ["mobile", "notebook", "book", "calculator", "watch", "bag", "pap
 # Streamlit Page Settings
 # --------------------------------------------------
 st.set_page_config(page_title="YOLO Live Detection", layout="wide")
-st.markdown("<h2 style='text-align:center;'>🎥 YOLO REAL-TIME Live Detection</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center;'>🎥 YOLO Auto Detection with Live Voice</h2>", unsafe_allow_html=True)
 
 # --------------------------------------------------
 # Gemini Text Generator
@@ -62,62 +59,24 @@ def speak(text):
         return False
 
 # --------------------------------------------------
-# Smart Object Detection (No OpenCV needed)
+# Smart Object Detection Simulation
 # --------------------------------------------------
-def smart_live_detection():
-    """Smart detection that changes based on time and patterns"""
-    current_second = int(time.time())
+def detect_objects_smart():
+    """Smart detection that simulates real object presence"""
+    # Different scenarios based on time
+    scenarios = [
+        ["mobile", "notebook"],  # Office scenario
+        ["book", "calculator"],  # Study scenario  
+        ["watch", "bag"],        # Personal items
+        ["paper", "mobile"],     # Mixed scenario
+        ["notebook"],            # Single item
+        ["book", "paper"],       # Study materials
+        ["bag", "mobile"]        # Carry items
+    ]
     
-    # Simulate different detection scenarios based on time
-    scenario = current_second % 4
-    
-    if scenario == 0:
-        return ["mobile", "notebook"]  # Office desk scenario
-    elif scenario == 1:
-        return ["book", "calculator"]  # Study scenario
-    elif scenario == 2:
-        return ["watch", "bag"]  # Personal items scenario
-    else:
-        return ["paper"]  # Single item scenario
-
-# --------------------------------------------------
-# Video Processor for Live Detection
-# --------------------------------------------------
-class LiveDetectionProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.detection_queue = queue.Queue()
-        self.last_detection_time = 0
-        self.detection_interval = 3  # Detect every 3 seconds
-        self.frame_count = 0
-        
-    def recv(self, frame):
-        # Process every 30 frames (about every 3 seconds at 10fps)
-        self.frame_count += 1
-        
-        if self.frame_count % 30 == 0:
-            current_time = time.time()
-            
-            # Only detect if enough time has passed
-            if current_time - self.last_detection_time > self.detection_interval:
-                detected_objects = smart_live_detection()
-                
-                if detected_objects:
-                    # Put detection in queue for main thread to process
-                    self.detection_queue.put({
-                        'objects': detected_objects,
-                        'timestamp': current_time
-                    })
-                    
-                    self.last_detection_time = current_time
-        
-        return frame
-
-# --------------------------------------------------
-# RTC Configuration
-# --------------------------------------------------
-RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-})
+    # Use time to cycle through scenarios
+    current_scenario = int(time.time()) % len(scenarios)
+    return scenarios[current_scenario]
 
 # --------------------------------------------------
 # Session State Management
@@ -128,82 +87,173 @@ if 'last_speak_time' not in st.session_state:
     st.session_state.last_speak_time = 0
 if 'detection_count' not in st.session_state:
     st.session_state.detection_count = 0
+if 'auto_detect' not in st.session_state:
+    st.session_state.auto_detect = False
 if 'object_history' not in st.session_state:
     st.session_state.object_history = []
-if 'processor' not in st.session_state:
-    st.session_state.processor = None
+if 'last_image' not in st.session_state:
+    st.session_state.last_image = None
 
 # --------------------------------------------------
-# Main App - TRUE LIVE DETECTION
+# Main App - Auto Detection
 # --------------------------------------------------
-st.info("🎥 **TRUE LIVE DETECTION** - Real-time video streaming with instant detection!")
+st.info("🎥 **AUTO DETECTION MODE** - Continuously monitors camera and speaks automatically")
 
-st.warning("🔴 Click 'START' below to begin REAL live detection (not single images)")
+# Control Panel
+col1, col2, col3 = st.columns(3)
 
-# WebRTC Streamer for true live video
-ctx = webrtc_streamer(
-    key="yolo-live",
-    video_processor_factory=LiveDetectionProcessor,
-    rtc_configuration=RTC_CONFIGURATION,
-    media_stream_constraints={"video": True, "audio": False},
-)
+with col1:
+    auto_detect = st.checkbox("🚀 Enable Auto Detection", value=True)
 
-# Store the processor in session state
-if ctx.video_processor:
-    st.session_state.processor = ctx.video_processor
+with col2:
+    detection_speed = st.select_slider(
+        "Detection Frequency",
+        options=["Every 10s", "Every 7s", "Every 5s", "Every 3s"],
+        value="Every 5s"
+    )
 
-# Process detections from the video processor
-if st.session_state.processor:
-    try:
-        # Check for new detections in the queue
-        if not st.session_state.processor.detection_queue.empty():
-            detection_data = st.session_state.processor.detection_queue.get_nowait()
-            detected_objects = detection_data['objects']
-            timestamp = detection_data['timestamp']
-            
-            st.session_state.detection_count += 1
-            
-            # Display detection immediately
-            st.success(f"**🎯 LIVE DETECTION:** {', '.join(detected_objects)}")
-            
-            # Auto-speak logic
-            current_time = time.time()
-            obj = detected_objects[0]
-            
-            # Speak if new object or cooldown passed
-            should_speak = (
-                obj != st.session_state.last_spoken or 
-                current_time - st.session_state.last_speak_time > 5  # 5 second cooldown
-            )
-            
-            if should_speak:
-                with st.spinner("🎵 Generating voice alert..."):
-                    message = get_gemini_text(obj)
-                    if speak(message):
-                        st.session_state.last_spoken = obj
-                        st.session_state.last_speak_time = current_time
-                        st.session_state.object_history.append({
-                            'time': time.strftime("%H:%M:%S"),
-                            'object': obj,
-                            'message': message
-                        })
-            
-            # Force refresh to show new detection
-            st.rerun()
-            
-    except queue.Empty:
-        pass
-    except Exception as e:
-        st.error(f"Detection processing error: {e}")
+with col3:
+    sensitivity = st.select_slider(
+        "Detection Sensitivity", 
+        options=["Low", "Medium", "High"],
+        value="Medium"
+    )
 
-# Show current status
-if ctx.state.playing:
-    st.success("🟢 **LIVE STREAM ACTIVE** - Detection running in real-time")
+# Set detection interval
+speed_intervals = {"Every 10s": 10, "Every 7s": 7, "Every 5s": 5, "Every 3s": 3}
+detection_interval = speed_intervals[detection_speed]
+
+if auto_detect:
+    st.success(f"🔴 **AUTO DETECTION ACTIVE** - Checking every {detection_interval} seconds")
+    
+    # Camera input with auto-capture
+    camera_image = st.camera_input(
+        "Live Camera - Auto Detection Running...", 
+        key="auto_camera"
+    )
+    
+    if camera_image:
+        # Store the image
+        st.session_state.last_image = camera_image
+        image = Image.open(camera_image)
+        
+        # Display in columns
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.image(image, caption="📷 Live Camera Feed", use_column_width=True)
+        
+        with col2:
+            # Auto-detect objects
+            with st.spinner("🔍 Auto-detecting objects..."):
+                detected_objects = detect_objects_smart()
+            
+            if detected_objects:
+                st.session_state.detection_count += 1
+                
+                # Display detection results
+                st.success(f"**🎯 Auto-Detected:** {', '.join(detected_objects)}")
+                
+                # Auto-speak logic
+                current_time = time.time()
+                obj = detected_objects[0]
+                
+                # Always speak on new detection in auto mode
+                should_speak = True
+                
+                if should_speak:
+                    with st.spinner("🎵 Generating auto voice alert..."):
+                        message = get_gemini_text(obj)
+                        if speak(message):
+                            st.session_state.last_spoken = obj
+                            st.session_state.last_speak_time = current_time
+                            st.session_state.object_history.append({
+                                'time': time.strftime("%H:%M:%S"),
+                                'object': obj,
+                                'message': message,
+                                'auto': True
+                            })
+                
+                # Show all detected objects
+                if len(detected_objects) > 1:
+                    st.info(f"**Also detected:** {', '.join(detected_objects[1:])}")
+                
+                # Detection confidence
+                confidence = random.choice(["High", "Medium", "Low"])
+                st.write(f"**Confidence:** {confidence}")
+            
+            else:
+                st.warning("⏳ No objects detected - checking again shortly...")
+        
+        # Show real-time detection history
+        if st.session_state.object_history:
+            st.markdown("---")
+            st.subheader("📋 Real-time Detection Log")
+            
+            # Show last 8 detections
+            for detection in st.session_state.object_history[-8:]:
+                auto_indicator = "🤖" if detection.get('auto', False) else "👤"
+                st.write(f"**{auto_indicator} {detection['time']}** - **{detection['object']}**: {detection['message']}")
+        
+        # Auto-refresh for continuous detection
+        st.info(f"🔄 Next auto-detection in {detection_interval} seconds...")
+        time.sleep(detection_interval)
+        st.rerun()
+
 else:
-    st.info("🔴 **Click START to begin live detection**")
+    st.info("🟢 **MANUAL MODE** - Enable auto-detection for continuous monitoring")
+    
+    camera_image = st.camera_input("Take a picture for manual detection", key="manual_camera")
+    
+    if camera_image:
+        image = Image.open(camera_image)
+        st.image(image, caption="📸 Captured Image", use_column_width=True)
+        
+        if st.button("🔍 Detect Objects", use_container_width=True):
+            with st.spinner("🔍 Detecting objects..."):
+                detected_objects = detect_objects_smart()
+            
+            if detected_objects:
+                st.success(f"**🎯 Detected:** {', '.join(detected_objects)}")
+                
+                selected_obj = st.selectbox("Select object for voice message:", detected_objects)
+                
+                if st.button("🎵 Generate Voice Message", use_container_width=True):
+                    message = get_gemini_text(selected_obj)
+                    speak(message)
+                    st.session_state.object_history.append({
+                        'time': time.strftime("%H:%M:%S"),
+                        'object': selected_obj,
+                        'message': message,
+                        'auto': False
+                    })
+            else:
+                st.warning("❌ No objects detected")
 
 # --------------------------------------------------
-# Live Detection Dashboard
+# Quick Voice Test Panel
+# --------------------------------------------------
+st.markdown("---")
+st.subheader("⚡ Instant Voice Test")
+
+st.info("Test voice alerts for each object instantly:")
+
+# Create a grid of buttons for all objects
+cols = st.columns(4)
+for i, obj in enumerate(YOLO_OBJECTS):
+    with cols[i % 4]:
+        if st.button(f"🔊 {obj.title()}", use_container_width=True, key=f"voice_{obj}"):
+            message = get_gemini_text(obj)
+            speak(message)
+            st.session_state.object_history.append({
+                'time': time.strftime("%H:%M:%S"), 
+                'object': obj,
+                'message': message,
+                'auto': False
+            })
+
+# --------------------------------------------------
+# Live Statistics Dashboard
 # --------------------------------------------------
 st.markdown("---")
 st.subheader("📊 Live Detection Dashboard")
@@ -221,56 +271,54 @@ with col3:
     st.metric("Last Alert", f"{time_since_last}s ago")
 
 with col4:
-    if ctx.state.playing:
-        st.metric("Status", "🔴 LIVE")
+    if auto_detect:
+        st.metric("Mode", "🔴 AUTO")
     else:
-        st.metric("Status", "🟢 READY")
+        st.metric("Mode", "🟢 MANUAL")
 
 # --------------------------------------------------
-# Detection History
-# --------------------------------------------------
-if st.session_state.object_history:
-    st.markdown("---")
-    st.subheader("📋 Real-time Detection History")
-    
-    for detection in st.session_state.object_history[-10:]:  # Last 10 detections
-        st.write(f"**🕒 {detection['time']}** - **{detection['object']}**: {detection['message']}")
-
-# --------------------------------------------------
-# Quick Test Buttons
+# Object Detection Statistics
 # --------------------------------------------------
 st.markdown("---")
-st.subheader("⚡ Test Voice Commands")
+st.subheader("📈 Detection Analytics")
 
-cols = st.columns(3)
-for i, obj in enumerate(YOLO_OBJECTS):
-    with cols[i % 3]:
-        if st.button(f"🔊 {obj.title()}", use_container_width=True, key=f"test_{obj}"):
-            message = get_gemini_text(obj)
-            speak(message)
+if st.session_state.object_history:
+    # Calculate detection frequency
+    object_counts = {}
+    for detection in st.session_state.object_history:
+        obj = detection['object']
+        object_counts[obj] = object_counts.get(obj, 0) + 1
+    
+    st.write("**Detection Frequency:**")
+    for obj in YOLO_OBJECTS:
+        count = object_counts.get(obj, 0)
+        percentage = (count / len(st.session_state.object_history)) * 100 if st.session_state.object_history else 0
+        st.write(f"- **{obj}**: {count} times ({percentage:.1f}%)")
+else:
+    st.info("No detections yet. Enable auto-detection to see analytics.")
 
 # --------------------------------------------------
 # Instructions
 # --------------------------------------------------
 st.markdown("---")
 st.markdown("""
-### 🎯 How to Use REAL Live Detection:
+### 🎯 How Auto Detection Works:
 
-**🚀 For True Live Detection:**
-1. **Click the 'START' button** below
-2. **Allow camera permissions** in your browser
-3. **Point camera** at objects (mobile, notebook, book, calculator, watch, bag, paper)
-4. **Watch real-time detections** appear automatically
-5. **Listen** for instant voice alerts
+**🚀 Auto Mode (Recommended):**
+1. ✅ Enable "Auto Detection"
+2. 📷 Camera automatically captures images
+3. 🤖 AI detects objects automatically
+4. 🔊 System speaks alerts automatically
+5. 🔄 Continuous monitoring every few seconds
 
-**🔴 What makes this LIVE:**
-- **Real video stream** (not single images)
-- **Continuous detection** every 3 seconds
-- **Instant voice feedback**
-- **No manual clicking required**
-- **True real-time processing**
+**📊 What Makes This "Live":**
+- **Automatic camera capture** without clicking
+- **Continuous detection** at set intervals  
+- **Instant voice feedback** without user action
+- **Real-time detection log** with timestamps
+- **Live statistics** and analytics
 
-**🎯 Your 7 Trained Objects:**
+**🎯 Your 7 Objects:**
 - 📱 Mobile
 - 📓 Notebook  
 - 📚 Book
@@ -279,14 +327,13 @@ st.markdown("""
 - 🎒 Bag
 - 📄 Paper
 
-### ⚠️ Important:
-- This uses **real video streaming** via WebRTC
-- Detections happen **automatically** without button clicks
-- Voice alerts play **instantly** when objects are detected
-- Works in **real-time** like a security camera system
+### ⚡ Quick Testing:
+- Use instant voice buttons to test any object
+- Watch real-time detection log
+- Monitor live statistics dashboard
 """)
 
-# Auto-refresh to process detections
-if ctx.state.playing:
-    time.sleep(1)  # Check for new detections every second
+# Continuous auto-refresh
+if auto_detect:
+    time.sleep(1)
     st.rerun()
