@@ -6,3 +6,7 @@ gtts==2.3.2
 numpy
 pandas
 Pillow
+streamlit
+ultralytics
+opencv-python
+Pillow
