@@ -7,7 +7,7 @@ import time
 import base64
 from PIL import Image
 import numpy as np
-import random
+import cv2
 
 # --------------------------------------------------
 # 🔐 Gemini API Key
@@ -20,10 +20,26 @@ gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 # Streamlit Page Settings
 # --------------------------------------------------
 st.set_page_config(page_title="YOLO Live Detection", layout="wide")
-st.markdown("<h2 style='text-align:center;'>🎥 YOLO Live Detection - 7 Objects</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center;'>🎥 YOLO Live Detection - Real Time</h2>", unsafe_allow_html=True)
 
 # Your trained YOLO objects
 YOLO_OBJECTS = ["mobile", "notebook", "book", "calculator", "watch", "bag", "paper"]
+
+# --------------------------------------------------
+# Load YOLO Model
+# --------------------------------------------------
+@st.cache_resource
+def load_model():
+    try:
+        from ultralytics import YOLO
+        model = YOLO("best.pt")
+        st.success("✅ YOLO Model Loaded Successfully!")
+        return model
+    except Exception as e:
+        st.error(f"❌ Failed to load YOLO model: {e}")
+        return None
+
+model = load_model()
 
 # --------------------------------------------------
 # Gemini Text Generator
@@ -61,42 +77,46 @@ def speak(text):
         return False
 
 # --------------------------------------------------
-# Smart Object Detection for your 7 objects
+# Real YOLO Object Detection
 # --------------------------------------------------
-def detect_yolo_objects(image):
-    """Smart detection for your 7 trained YOLO objects"""
+def detect_objects_yolo(image):
+    """Real YOLO object detection"""
+    if model is None:
+        return []
+    
     try:
-        # Simulate YOLO detection patterns
-        detected = []
+        # Convert PIL to numpy array (OpenCV format)
+        img_array = np.array(image)
         
-        # Analyze image characteristics
-        width, height = image.size
-        aspect_ratio = width / height
+        # Convert RGB to BGR for OpenCV
+        if len(img_array.shape) == 3:
+            img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        else:
+            img_bgr = img_array
         
-        # Different detection patterns based on image type
-        if aspect_ratio > 1.2:  # Wide image - likely desk/table
-            # More likely to detect desk objects
-            desk_objects = ["mobile", "notebook", "book", "calculator", "paper"]
-            for obj in desk_objects:
-                if random.random() < 0.4:
-                    detected.append(obj)
+        # Run YOLO prediction
+        results = model.predict(img_bgr, conf=0.5, verbose=False)
         
-        else:  # Portrait/square - likely personal items
-            # More likely to detect personal objects
-            personal_objects = ["mobile", "watch", "bag", "book"]
-            for obj in personal_objects:
-                if random.random() < 0.5:
-                    detected.append(obj)
+        detected_objects = []
         
-        # Ensure at least one detection from your trained objects
-        if not detected:
-            detected = [random.choice(YOLO_OBJECTS)]
+        # Process detections
+        for r in results:
+            boxes = r.boxes
+            if boxes is not None:
+                for box in boxes:
+                    cls = int(box.cls[0])
+                    conf = float(box.conf[0])
+                    class_name = model.names[cls]
+                    
+                    # Only include if confidence > 0.5 and in our object list
+                    if conf > 0.5 and class_name in YOLO_OBJECTS:
+                        detected_objects.append(class_name)
         
-        return detected[:2]  # Return max 2 objects
+        return list(set(detected_objects))  # Remove duplicates
         
-    except:
-        # Fallback to random detection from your objects
-        return [random.choice(YOLO_OBJECTS)]
+    except Exception as e:
+        st.error(f"Detection error: {e}")
+        return []
 
 # --------------------------------------------------
 # Session State Management
@@ -113,9 +133,13 @@ if 'object_history' not in st.session_state:
     st.session_state.object_history = []
 
 # --------------------------------------------------
-# Main App - Live Detection
+# Main App - Real Live Detection
 # --------------------------------------------------
 st.info(f"🎯 **Trained to detect:** {', '.join(YOLO_OBJECTS)}")
+
+if model is None:
+    st.error("❌ YOLO model not loaded. Please check if 'best.pt' is in your directory.")
+    st.stop()
 
 # Control Panel
 col1, col2 = st.columns(2)
@@ -131,57 +155,71 @@ with col2:
     )
 
 # Set detection interval
-speed_intervals = {"Slow": 6, "Medium": 4, "Fast": 2}
+speed_intervals = {"Slow": 5, "Medium": 3, "Fast": 2}
 detection_interval = speed_intervals[detection_speed]
 
 if auto_detect:
-    st.success(f"🔴 **LIVE** - Detecting every {detection_interval} seconds")
+    st.success(f"🔴 **LIVE** - Real YOLO detection every {detection_interval} seconds")
     
     # Live camera feed
-    camera_image = st.camera_input("Live Camera - YOLO Detection Active", key="live_camera")
+    camera_image = st.camera_input("Live Camera - Real YOLO Detection Active", key="live_camera")
     
     if camera_image:
         # Display camera feed
         image = Image.open(camera_image)
-        st.image(image, caption="🔄 Live Feed - YOLO Detection Active", use_column_width=True)
         
-        # Detect objects
-        with st.spinner("🔍 YOLO is detecting objects..."):
-            detected_objects = detect_yolo_objects(image)
+        # Create columns for side-by-side display
+        col1, col2 = st.columns(2)
         
-        if detected_objects:
-            st.session_state.detection_count += 1
+        with col1:
+            st.image(image, caption="📷 Live Camera Feed", use_column_width=True)
+        
+        with col2:
+            # Detect objects using real YOLO
+            with st.spinner("🔍 YOLO is detecting objects..."):
+                detected_objects = detect_objects_yolo(image)
             
-            # Display detection results
-            st.success(f"**🎯 YOLO Detected:** {', '.join(detected_objects)}")
-            
-            # Auto-speak logic
-            current_time = time.time()
-            obj = detected_objects[0]
-            
-            # Speak if new object or cooldown passed
-            should_speak = (
-                obj != st.session_state.last_spoken or 
-                current_time - st.session_state.last_speak_time > detection_interval + 2
-            )
-            
-            if should_speak:
-                with st.spinner("🎵 Generating voice alert..."):
-                    message = get_gemini_text(obj)
-                    if speak(message):
-                        st.session_state.last_spoken = obj
-                        st.session_state.last_speak_time = current_time
-                        st.session_state.object_history.append({
-                            'time': time.strftime("%H:%M:%S"),
-                            'object': obj,
-                            'message': message
-                        })
-            
-            # Show recent detection history
-            if len(st.session_state.object_history) > 0:
-                st.subheader("📋 Recent Detections")
-                for detection in st.session_state.object_history[-3:]:
-                    st.write(f"**{detection['time']}** - {detection['object']}: *{detection['message']}*")
+            if detected_objects:
+                st.session_state.detection_count += 1
+                
+                # Display detection results
+                st.success(f"**🎯 YOLO Detected:** {', '.join(detected_objects)}")
+                
+                # Auto-speak logic
+                current_time = time.time()
+                obj = detected_objects[0]  # Speak about first detected object
+                
+                # Speak if new object or cooldown passed
+                should_speak = (
+                    obj != st.session_state.last_spoken or 
+                    current_time - st.session_state.last_speak_time > detection_interval + 2
+                )
+                
+                if should_speak:
+                    with st.spinner("🎵 Generating voice alert..."):
+                        message = get_gemini_text(obj)
+                        if speak(message):
+                            st.session_state.last_spoken = obj
+                            st.session_state.last_speak_time = current_time
+                            st.session_state.object_history.append({
+                                'time': time.strftime("%H:%M:%S"),
+                                'object': obj,
+                                'message': message,
+                                'confidence': 'High'
+                            })
+                
+                # Show all detected objects
+                if len(detected_objects) > 1:
+                    st.info(f"**Also detected:** {', '.join(detected_objects[1:])}")
+                
+            else:
+                st.warning("❌ No objects detected")
+        
+        # Show recent detection history
+        if len(st.session_state.object_history) > 0:
+            st.subheader("📋 Detection History")
+            for detection in st.session_state.object_history[-5:]:  # Last 5 detections
+                st.write(f"**{detection['time']}** - {detection['object']}: *{detection['message']}*")
         
         # Auto-refresh for continuous detection
         time.sleep(detection_interval)
@@ -196,25 +234,28 @@ else:
         image = Image.open(camera_image)
         st.image(image, caption="📸 Captured Image", use_column_width=True)
         
-        if st.button("🔍 Detect Objects", use_container_width=True):
+        if st.button("🔍 Detect Objects with YOLO", use_container_width=True):
             with st.spinner("🔍 YOLO is analyzing image..."):
-                detected_objects = detect_yolo_objects(image)
+                detected_objects = detect_objects_yolo(image)
             
             if detected_objects:
-                st.success(f"**🎯 Detected:** {', '.join(detected_objects)}")
+                st.success(f"**🎯 YOLO Detected:** {', '.join(detected_objects)}")
                 
                 # Let user choose which object to speak about
-                selected_obj = st.selectbox("Select object for voice message:", detected_objects)
-                
-                if st.button("🎵 Generate Voice Message", use_container_width=True):
-                    message = get_gemini_text(selected_obj)
-                    speak(message)
+                if detected_objects:
+                    selected_obj = st.selectbox("Select object for voice message:", detected_objects)
+                    
+                    if st.button("🎵 Generate Voice Message", use_container_width=True):
+                        message = get_gemini_text(selected_obj)
+                        speak(message)
+            else:
+                st.warning("❌ No objects detected in the image")
 
 # --------------------------------------------------
 # Quick Detection Buttons for all 7 objects
 # --------------------------------------------------
 st.markdown("---")
-st.subheader("⚡ Quick Detection Buttons")
+st.subheader("⚡ Quick Voice Commands")
 
 # Create buttons for all 7 objects
 cols = st.columns(3)
@@ -249,10 +290,10 @@ with col4:
         st.metric("Status", "🟢 READY")
 
 # --------------------------------------------------
-# Object Detection Frequency
+# Object Detection Statistics
 # --------------------------------------------------
 st.markdown("---")
-st.subheader("📈 Detection Statistics")
+st.subheader("📈 Object Detection Statistics")
 
 # Calculate detection frequency
 object_counts = {}
@@ -262,48 +303,50 @@ for detection in st.session_state.object_history:
 
 if object_counts:
     st.write("**Detection Frequency:**")
-    for obj, count in object_counts.items():
+    for obj in YOLO_OBJECTS:
+        count = object_counts.get(obj, 0)
         st.write(f"- {obj}: {count} time(s)")
 else:
-    st.write("No detections yet. Enable live detection to see statistics.")
+    st.info("No detections yet. Enable live detection to see statistics.")
 
 # --------------------------------------------------
 # Instructions
 # --------------------------------------------------
 st.markdown("---")
 st.markdown("""
-### 🎯 How to Use:
+### 🎯 How to Use Real YOLO Detection:
 
 **🚀 Auto Live Mode:**
 1. Enable "Live Auto-Detection"
-2. Point camera at objects
-3. YOLO automatically detects your 7 trained objects
-4. System speaks alerts automatically
+2. Point camera at objects (mobile, notebook, book, calculator, watch, bag, paper)
+3. Real YOLO model detects objects automatically
+4. System speaks alerts using Gemini AI
 5. Watch real-time detection history
 
 **📸 Manual Mode:**
 1. Take a picture with camera
-2. Click "Detect Objects"
+2. Click "Detect Objects with YOLO"
 3. Select object from dropdown
 4. Click "Generate Voice Message"
 
-**⚡ Quick Buttons:**
-- Use quick buttons for instant detection of any object
-- Perfect for testing specific objects
+**⚡ Quick Commands:**
+- Test voice alerts for specific objects
+- Perfect for verifying detection
 
-### 🎯 Your Trained Objects:
+### 🎯 Your YOLO Model Objects:
 - 📱 Mobile
-- 📓 Notebook
+- 📓 Notebook  
 - 📚 Book
 - 🧮 Calculator
 - ⌚ Watch
 - 🎒 Bag
 - 📄 Paper
 
-### ⚙️ Detection Settings:
-- **Slow:** 6-second intervals
-- **Medium:** 4-second intervals  
-- **Fast:** 2-second intervals
+### ⚙️ Real YOLO Detection:
+- **Confidence threshold:** 50%
+- **Real-time processing**
+- **Actual object detection** (not simulated)
+- **Automatic voice feedback**
 """)
 
 # Continuous refresh for auto mode
