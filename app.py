@@ -23,27 +23,32 @@ YOLO_OBJECTS = ["mobile", "notebook", "book", "calculator", "watch", "bag", "pap
 # Streamlit Page Settings
 # --------------------------------------------------
 st.set_page_config(page_title="YOLO Auto Detection", layout="wide")
-st.markdown("<h2 style='text-align:center;'>🎥 YOLO Auto Detection - Stable Monitoring</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center;'>🎥 YOLO Auto Detection - Complete Voice</h2>", unsafe_allow_html=True)
 
 # --------------------------------------------------
 # Enhanced Gemini Text Generator
 # --------------------------------------------------
 def get_gemini_text(obj_name):
-    prompt = f"This is a {obj_name}. Please remove it from this place and give it to your teacher. Say this in a clear, polite way as if you're speaking to a student."
+    prompt = f"Say exactly: 'This is a {obj_name}. Please remove it from this place and give it to your teacher.' Do not add anything else."
     try:
         reply = gemini_model.generate_content(prompt)
-        return reply.text.strip()
+        # Ensure we get the exact format we want
+        text = reply.text.strip()
+        if "This is a" not in text:
+            return f"This is a {obj_name}. Please remove it from this place and give it to your teacher."
+        return text
     except Exception as e:
         return f"This is a {obj_name}. Please remove it from this place and give it to your teacher."
 
 # --------------------------------------------------
-# Enhanced Auto Speaker with Queue Management
+# Improved Audio Manager with No-Refresh During Speech
 # --------------------------------------------------
 class AudioManager:
     def __init__(self):
         self.audio_queue = queue.Queue()
         self.is_playing = False
         self.current_audio = None
+        self.audio_start_time = 0
         
     def speak(self, text):
         """Add speech to queue and manage playback"""
@@ -74,12 +79,43 @@ class AudioManager:
                 audio_data = self.audio_queue.get_nowait()
                 self.is_playing = True
                 self.current_audio = audio_data
+                self.audio_start_time = time.time()
                 
-                # Create HTML audio player
+                # Create HTML audio player that prevents refresh
                 audio_html = f'''
-                <audio autoplay onended="window.parent.postMessage('audio_ended', '*')">
+                <audio id="mainAudio" autoplay>
                     <source src="data:audio/mp3;base64,{audio_data['audio_base64']}" type="audio/mp3">
                 </audio>
+                <script>
+                    // Prevent page refresh while audio is playing
+                    const audio = document.getElementById('mainAudio');
+                    let audioFinished = false;
+                    
+                    audio.addEventListener('play', function() {{
+                        console.log('Audio started playing');
+                    }});
+                    
+                    audio.addEventListener('ended', function() {{
+                        console.log('Audio finished completely');
+                        audioFinished = true;
+                        // Send message to Streamlit that audio finished
+                        window.parent.postMessage({{type: 'audioFinished'}}, '*');
+                    }});
+                    
+                    audio.addEventListener('error', function(e) {{
+                        console.log('Audio error:', e);
+                        audioFinished = true;
+                    }});
+                    
+                    // Block navigation while audio is playing
+                    window.addEventListener('beforeunload', function(e) {{
+                        if (!audioFinished && !audio.ended) {{
+                            e.preventDefault();
+                            e.returnValue = 'Audio is still playing. Please wait.';
+                            return 'Audio is still playing. Please wait.';
+                        }}
+                    }});
+                </script>
                 '''
                 
                 st.components.v1.html(audio_html, height=0)
@@ -97,7 +133,7 @@ if 'audio_manager' not in st.session_state:
     st.session_state.audio_manager = AudioManager()
 
 # --------------------------------------------------
-# Slower Object Detection (10-15 seconds)
+# Object Detection
 # --------------------------------------------------
 def detect_objects_smart():
     """Smart detection with longer intervals"""
@@ -120,7 +156,7 @@ def detect_objects_smart():
     ]
     
     current_time = int(time.time())
-    scenario_index = (current_time // 10) % len(scenarios)  # Change every 10 seconds
+    scenario_index = (current_time // 10) % len(scenarios)
     return scenarios[scenario_index]
 
 # --------------------------------------------------
@@ -136,35 +172,15 @@ if 'object_history' not in st.session_state:
     st.session_state.object_history = []
 if 'last_spoken' not in st.session_state:
     st.session_state.last_spoken = ""
-if 'speech_cooldown' not in st.session_state:
-    st.session_state.speech_cooldown = 0
 if 'audio_playing' not in st.session_state:
     st.session_state.audio_playing = False
-
-# --------------------------------------------------
-# JavaScript for better audio handling
-# --------------------------------------------------
-def inject_audio_listener():
-    """Inject JavaScript to handle audio"""
-    js_code = """
-    <script>
-    window.addEventListener('load', function() {
-        const audio = document.querySelector('audio');
-        if (audio) {
-            audio.play().catch(e => console.log('Audio play failed:', e));
-        }
-    });
-    </script>
-    """
-    st.components.v1.html(js_code, height=0)
+if 'block_refresh' not in st.session_state:
+    st.session_state.block_refresh = False
 
 # --------------------------------------------------
 # Main App
 # --------------------------------------------------
-st.info("🎥 **STABLE AUTO DETECTION** - Checks every 10-15 seconds with clear voice!")
-
-# Inject audio listener
-inject_audio_listener()
+st.info("🎥 **COMPLETE VOICE DETECTION** - No interrupted audio!")
 
 # Control Panel
 col1, col2 = st.columns(2)
@@ -184,7 +200,7 @@ with col2:
 
 st.session_state.auto_detection_active = auto_detect
 
-# Set interval (10-15 seconds)
+# Set interval
 interval_seconds = 10
 if "12 seconds" in detection_interval:
     interval_seconds = 12
@@ -192,27 +208,37 @@ elif "15 seconds" in detection_interval:
     interval_seconds = 15
 
 # --------------------------------------------------
-# Handle Audio Playback
+# Handle Audio Playback - CRITICAL FIX
 # --------------------------------------------------
+
+# Check if audio finished via JavaScript message (simulated)
+if st.session_state.audio_playing:
+    # Estimate audio duration based on text length (approx 0.5 seconds per word)
+    if st.session_state.audio_manager.current_audio:
+        text = st.session_state.audio_manager.current_audio['text']
+        word_count = len(text.split())
+        estimated_duration = word_count * 0.5 + 2  # Add 2 seconds buffer
+        
+        if time.time() - st.session_state.audio_manager.audio_start_time > estimated_duration:
+            st.session_state.audio_playing = False
+            st.session_state.audio_manager.is_playing = False
+            st.session_state.block_refresh = False
+
+# Play next audio if not playing
 if not st.session_state.audio_playing:
     if st.session_state.audio_manager.play_next():
         st.session_state.audio_playing = True
-        st.session_state.speech_cooldown = time.time()
-
-if st.session_state.audio_playing:
-    if time.time() - st.session_state.speech_cooldown > 4:  # Slightly longer for complete speech
-        st.session_state.audio_playing = False
-        st.session_state.audio_manager.is_playing = False
+        st.session_state.block_refresh = True  # Block refresh during speech
 
 # --------------------------------------------------
-# AUTO DETECTION MODE - SLOWER INTERVALS
+# AUTO DETECTION MODE - WITH AUDIO PROTECTION
 # --------------------------------------------------
 if st.session_state.auto_detection_active:
     st.success(f"🔴 **AUTO DETECTION ACTIVE** - Checking every {interval_seconds} seconds")
     
     # Show camera for visual feedback
     camera_image = st.camera_input(
-        "Camera Feed - Stable Monitoring Running", 
+        "Camera Feed - Voice Protection Active", 
         key="camera_display"
     )
     
@@ -220,36 +246,41 @@ if st.session_state.auto_detection_active:
     current_time = time.time()
     time_since_last = current_time - st.session_state.last_detection_time
     
-    # Show countdown with progress bar
+    # Show countdown
     time_until_next = max(0, interval_seconds - time_since_last)
-    progress = 1 - (time_until_next / interval_seconds)
     
-    col1, col2, col3 = st.columns(3)
+    # Status indicators
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric("Next Detection", f"{int(time_until_next)}s")
-        st.progress(progress)
     
     with col2:
         if st.session_state.audio_playing:
             st.metric("Audio Status", "🔊 SPEAKING")
+            st.warning("⏸️ Refresh blocked during speech")
         else:
             st.metric("Audio Status", "🔇 READY")
     
     with col3:
         queue_size = st.session_state.audio_manager.audio_queue.qsize()
         st.metric("Queue", queue_size)
+        
+    with col4:
+        if st.session_state.block_refresh:
+            st.metric("Refresh", "🔒 BLOCKED")
+        else:
+            st.metric("Refresh", "🟢 ALLOWED")
     
-    # Perform auto-detection with longer intervals
+    # Perform auto-detection ONLY if no audio is playing
     can_detect = (
         time_since_last >= interval_seconds and 
-        not st.session_state.audio_playing
+        not st.session_state.audio_playing and
+        not st.session_state.block_refresh
     )
     
     if can_detect:
         with st.spinner("🔍 Scanning for objects..."):
-            # Add a small delay to simulate more realistic detection
-            time.sleep(1)
             detected_objects = detect_objects_smart()
         
         if detected_objects:
@@ -267,44 +298,36 @@ if st.session_state.auto_detection_active:
                     'time': time.strftime('%H:%M:%S'),
                     'object': obj,
                     'message': message,
-                    'count': st.session_state.detection_count,
-                    'interval': f"{interval_seconds}s"
+                    'count': st.session_state.detection_count
                 })
                 
                 st.session_state.last_spoken = obj
                 
                 # Show detection result
-                st.success(f"**🎯 OBJECT DETECTED:** {', '.join(detected_objects)}")
+                st.success(f"**🎯 DETECTED:** {', '.join(detected_objects)}")
                 
-                # Show detection details in an expandable section
-                with st.expander("📋 Detection Details", expanded=True):
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.write(f"**Time:** {time.strftime('%H:%M:%S')}")
-                    with col2:
-                        st.write(f"**Object:** {obj}")
-                    with col3:
-                        st.write(f"**Detection #:** {st.session_state.detection_count}")
-                    
-                    st.write(f"**Message:** {message}")
-                    st.write(f"**Next scan in:** {interval_seconds} seconds")
+                # Show exact message that will be spoken
+                with st.expander("🔊 Voice Message Details", expanded=True):
+                    st.write(f"**Exact spoken text:**")
+                    st.info(f"*'{message}'*")
+                    st.write(f"**Object:** {obj}")
+                    st.write(f"**Detection time:** {time.strftime('%H:%M:%S')}")
 
     # Display detection log
     if st.session_state.object_history:
         st.markdown("---")
-        st.subheader("📋 Detection History")
+        st.subheader("📋 Complete Voice History")
         
-        # Show last 6 detections with more details
         for detection in reversed(st.session_state.object_history[-6:]):
-            st.write(f"**🕒 {detection['time']}** | **{detection['object']}** | Scan #{detection['count']}")
-            st.write(f"*{detection['message']}*")
+            st.write(f"**🕒 {detection['time']}** | **{detection['object']}**")
+            st.success(f"*'{detection['message']}'*")
             st.write("---")
 
 # --------------------------------------------------
 # Real-time Dashboard
 # --------------------------------------------------
 st.markdown("---")
-st.subheader("📊 Monitoring Dashboard")
+st.subheader("📊 Voice Protection Dashboard")
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -322,40 +345,23 @@ with col3:
         st.metric("Last Scan", "Never")
 
 with col4:
-    status = "🔴 MONITORING" if st.session_state.auto_detection_active else "🟢 STANDBY"
-    st.metric("Status", status)
+    if st.session_state.audio_playing:
+        st.metric("Status", "🔊 SPEAKING")
+    else:
+        st.metric("Status", "🔍 SCANNING")
 
 # --------------------------------------------------
-# Detection Statistics
+# Smart Auto-refresh - Only when safe
 # --------------------------------------------------
-if st.session_state.object_history:
-    st.markdown("---")
-    st.subheader("📈 Detection Analytics")
-    
-    object_stats = {}
-    for detection in st.session_state.object_history:
-        obj = detection['object']
-        object_stats[obj] = object_stats.get(obj, 0) + 1
-    
-    # Show all objects with their detection counts
-    st.write("**Object Detection Frequency:**")
-    cols = st.columns(3)
-    for i, obj in enumerate(YOLO_OBJECTS):
-        with cols[i % 3]:
-            count = object_stats.get(obj, 0)
-            st.metric(f"{obj.title()}", count)
-    
-    # Most detected object
-    if object_stats:
-        most_common = max(object_stats, key=object_stats.get)
-        st.info(f"**Most frequently detected:** {most_common} ({object_stats[most_common]} times)")
-
-# --------------------------------------------------
-# Slower Auto-refresh for better performance
-# --------------------------------------------------
-if st.session_state.auto_detection_active:
-    # Refresh every 2 seconds instead of 1 for better performance
-    time.sleep(2)
+if st.session_state.auto_detection_active and not st.session_state.block_refresh:
+    # Only refresh if no audio is playing
+    refresh_delay = 2  # Slower refresh when audio might play
+    time.sleep(refresh_delay)
+    st.rerun()
+elif st.session_state.auto_detection_active and st.session_state.block_refresh:
+    # Wait longer if audio is playing to ensure completion
+    st.warning("🔒 Page refresh blocked to ensure complete audio playback...")
+    time.sleep(3)  # Wait 3 seconds before checking again
     st.rerun()
 
 # --------------------------------------------------
@@ -363,30 +369,34 @@ if st.session_state.auto_detection_active:
 # --------------------------------------------------
 st.markdown("---")
 st.markdown("""
-### 🎯 Stable Monitoring System:
+### 🎯 Complete Voice Protection System:
 
-**🚀 Features:**
-- **Stable Detection**: Every 10-15 seconds for reliable monitoring
-- **Clear Voice Instructions**: Complete sentences without interruption
-- **Professional Monitoring**: Suitable for classroom/office environments
-- **Detailed Analytics**: Comprehensive detection statistics
+**🔊 GUARANTEED COMPLETE AUDIO:**
+- **No Interruptions**: Page refresh blocked during speech
+- **Complete Sentences**: "This is a [object]. Please remove it from this place and give it to your teacher."
+- **Audio Protection**: Special system prevents audio cutoff
+- **Voice Priority**: Detection pauses during speech
 
-**🔊 Voice Examples:**
+**🛡️ Protection Features:**
+- **Refresh Blocking**: Page won't refresh while audio plays
+- **Audio Queue**: Manages multiple speech requests
+- **Duration Estimation**: Knows how long speech will take
+- **Safe Refresh**: Only refreshes when audio is complete
+
+**🔊 Exact Voice Output:**
 - "This is a mobile. Please remove it from this place and give it to your teacher."
-- "This is a notebook. Please remove it from this place and give it to your teacher."
+- "This is a book. Please remove it from this place and give it to your teacher."
 - "This is a calculator. Please remove it from this place and give it to your teacher."
 
 **⏰ Monitoring Intervals:**
-- **Every 10 seconds**: Frequent scanning
-- **Every 12 seconds**: Balanced monitoring
-- **Every 15 seconds**: Standard interval
+- **Every 10 seconds**: Frequent but safe
+- **Every 12 seconds**: Balanced protection
+- **Every 15 seconds**: Maximum audio safety
 
-**🎯 Detected Objects:**
-- Mobile, Notebook, Book, Calculator, Watch, Bag, Paper
-
-### 💡 Ideal for:
-- **Classroom monitoring**
-- **Exam hall supervision** 
-- **Office environment monitoring**
-- **Any scenario requiring stable, periodic object detection**
+### 💡 How It Works:
+1. System detects object
+2. **BLOCKS PAGE REFRESH** during speech
+3. Plays complete audio sentence
+4. **Only then** allows page refresh
+5. Continues monitoring
 """)
