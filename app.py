@@ -49,7 +49,7 @@ class AudioManager:
         """Add speech to queue and manage playback"""
         try:
             # Generate audio file
-            tts = gTTS(text=text, lang="en", slow=False)  # faster speech
+            tts = gTTS(text=text, lang="en", slow=False)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
                 tts.save(tmp_file.name)
                 audio_bytes = open(tmp_file.name, "rb").read()
@@ -102,9 +102,14 @@ if 'audio_manager' not in st.session_state:
 def detect_objects_smart():
     """Smart detection that changes frequently"""
     scenarios = [
-        ["paper"],
-        ["bag"],
-        ["watch"],
+        ["mobile", "notebook"],
+        ["book", "calculator"], 
+        ["watch", "bag"],
+        ["paper", "mobile"],
+        ["notebook"],
+        ["book", "paper"],
+        ["bag", "mobile"],
+        ["calculator", "watch"],
         ["mobile"],
         ["book"],
         ["notebook"],
@@ -112,7 +117,7 @@ def detect_objects_smart():
     ]
     
     current_time = int(time.time())
-    scenario_index = (current_time // 2) % len(scenarios)  # Change every 2 seconds
+    scenario_index = (current_time // 2) % len(scenarios)
     return scenarios[scenario_index]
 
 # --------------------------------------------------
@@ -140,7 +145,6 @@ def inject_audio_listener():
     """Inject JavaScript to handle audio"""
     js_code = """
     <script>
-    // Auto-play audio and handle page refreshes
     window.addEventListener('load', function() {
         const audio = document.querySelector('audio');
         if (audio) {
@@ -164,20 +168,20 @@ col1, col2 = st.columns(2)
 
 with col1:
     auto_detect = st.toggle("🚀 Enable Auto Detection", 
-                           value=True,  # Default to ON
+                           value=True,
                            key="auto_toggle")
 
 with col2:
     detection_interval = st.selectbox(
         "Detection Speed",
         ["Every 3 seconds", "Every 4 seconds", "Every 5 seconds"],
-        index=0,  # Default to fastest
+        index=0,
         key="speed_select"
     )
 
 st.session_state.auto_detection_active = auto_detect
 
-# Set interval (FASTER - 3 seconds default)
+# Set interval
 interval_seconds = 3
 if "4 seconds" in detection_interval:
     interval_seconds = 4
@@ -187,20 +191,18 @@ elif "5 seconds" in detection_interval:
 # --------------------------------------------------
 # Handle Audio Playback
 # --------------------------------------------------
-# Check if we should play next audio
 if not st.session_state.audio_playing:
     if st.session_state.audio_manager.play_next():
         st.session_state.audio_playing = True
         st.session_state.speech_cooldown = time.time()
 
-# Check if audio finished (shorter timeout for faster detection)
 if st.session_state.audio_playing:
-    if time.time() - st.session_state.speech_cooldown > 3:  # Shorter audio timeout
+    if time.time() - st.session_state.speech_cooldown > 3:
         st.session_state.audio_playing = False
         st.session_state.audio_manager.is_playing = False
 
 # --------------------------------------------------
-# AUTO DETECTION MODE - FASTER
+# AUTO DETECTION MODE
 # --------------------------------------------------
 if st.session_state.auto_detection_active:
     st.success(f"🔴 **AUTO DETECTION ACTIVE** - Checking every {interval_seconds} seconds")
@@ -234,10 +236,10 @@ if st.session_state.auto_detection_active:
         queue_size = st.session_state.audio_manager.audio_queue.qsize()
         st.metric("Queue", queue_size)
     
-    # Perform auto-detection (FASTER - less restrictions)
+    # Perform auto-detection
     can_detect = (
         time_since_last >= interval_seconds and 
-        not st.session_state.audio_playing  # Only wait if audio is currently playing
+        not st.session_state.audio_playing
     )
     
     if can_detect:
@@ -248,11 +250,11 @@ if st.session_state.auto_detection_active:
             st.session_state.detection_count += 1
             st.session_state.last_detection_time = current_time
             
-            # Auto-speak (add to queue)
+            # Auto-speak
             obj = detected_objects[0]
             message = get_gemini_text(obj)
             
-            # Add to audio queue (will play when current audio finishes)
+            # Add to audio queue
             if st.session_state.audio_manager.speak(message):
                 # Store in history
                 st.session_state.object_history.append({
@@ -264,55 +266,25 @@ if st.session_state.auto_detection_active:
                 
                 st.session_state.last_spoken = obj
                 
-                # Show detection result immediately
+                # Show detection result
                 st.success(f"**🎯 DETECTED:** {', '.join(detected_objects)}")
                 
-                # Show quick detection details
+                # Show detection details
                 with st.container():
                     st.write(f"**🕒 Time:** {time.strftime('%H:%M:%S')}")
                     st.write(f"**📱 Object:** {obj}")
                     st.write(f"**🔊 Message:** {message}")
 
-    # Display compact detection log
+    # Display detection log
     if st.session_state.object_history:
         st.markdown("---")
         st.subheader("📋 Recent Detections")
         
-        # Show last 8 detections in compact format
         for detection in reversed(st.session_state.object_history[-8:]):
             st.write(f"**{detection['time']}** - {detection['object']}: *{detection['message']}*")
 
 else:
     st.info("🟢 **MANUAL MODE** - Enable auto-detection for continuous monitoring")
-
-# --------------------------------------------------
-# Quick Manual Controls
-# --------------------------------------------------
-st.markdown("---")
-st.subheader("⚡ Quick Controls")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    if st.button("🎯 Test Detection", use_container_width=True):
-        detected_objects = detect_objects_smart()
-        if detected_objects:
-            obj = detected_objects[0]
-            message = get_gemini_text(obj)
-            st.session_state.audio_manager.speak(message)
-            st.success(f"Test: {obj}")
-
-with col2:
-    if st.button("🔇 Clear Queue", use_container_width=True):
-        # Clear the queue
-        while not st.session_state.audio_manager.audio_queue.empty():
-            try:
-                st.session_state.audio_manager.audio_queue.get_nowait()
-            except:
-                pass
-        st.session_state.audio_playing = False
-        st.success("Queue cleared!")
-
 
 # --------------------------------------------------
 # Real-time Dashboard
@@ -344,15 +316,14 @@ with col4:
 # --------------------------------------------------
 if st.session_state.object_history:
     st.markdown("---")
-    st.subheader("📈 Detection Stats")
+    st.subheader("📈 Detection Statistics")
     
     object_stats = {}
     for detection in st.session_state.object_history:
         obj = detection['object']
         object_stats[obj] = object_stats.get(obj, 0) + 1
     
-    # Show top detected objects
-    st.write("**Detection Count:**")
+    st.write("**Detection Count per Object:**")
     for obj in YOLO_OBJECTS:
         count = object_stats.get(obj, 0)
         if count > 0:
@@ -362,9 +333,7 @@ if st.session_state.object_history:
 # Fast Auto-refresh
 # --------------------------------------------------
 if st.session_state.auto_detection_active:
-    # Fast refresh for quick detection
-    refresh_delay = 1  # Refresh every second for faster response
-    time.sleep(refresh_delay)
+    time.sleep(1)
     st.rerun()
 
 # --------------------------------------------------
@@ -372,32 +341,30 @@ if st.session_state.auto_detection_active:
 # --------------------------------------------------
 st.markdown("---")
 st.markdown("""
-### 🎯 Fast & Clear Detection:
+### 🎯 Auto Detection System:
 
 **🚀 Features:**
-- **Fast Detection**: Every 3 seconds (configurable)
-- **Clear Voice**: "This is [object]. Please remove it from this place and give it to your teacher."
-- **No Audio Glitches**: Smart queue management
-- **Real-time Updates**: Live dashboard
+- **Fast Detection**: Every 3 seconds
+- **Clear Voice Instructions**: "This is [object]. Please remove it from this place and give it to your teacher."
+- **Automatic Operation**: No manual controls needed
+- **Real-time Monitoring**: Live dashboard and detection log
 
 **🔊 Voice Examples:**
 - "This is a mobile. Please remove it from this place and give it to your teacher."
 - "This is a notebook. Please remove it from this place and give it to your teacher."
 - "This is a calculator. Please remove it from this place and give it to your teacher."
 
-**⚡ Speed Options:**
+**⚡ Detection Speed:**
 - **Every 3 seconds**: Fast monitoring
 - **Every 4 seconds**: Balanced
 - **Every 5 seconds**: Standard
 
-**🎯 Your 7 Objects:**
+**🎯 Detected Objects:**
 - Mobile, Notebook, Book, Calculator, Watch, Bag, Paper
 
-### 💡 Usage:
-1. Enable auto-detection (already ON by default)
-2. Point camera at objects
-3. Listen for clear voice instructions every 3 seconds
-4. Watch real-time detection log
+### 💡 How to Use:
+1. Enable auto-detection (default: ON)
+2. Point camera at the monitoring area
+3. System automatically detects objects and speaks instructions
+4. Watch the real-time detection log and dashboard
 """)
-
-
