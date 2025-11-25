@@ -283,6 +283,9 @@ if st.session_state.auto_detection_active:
         for detection in reversed(st.session_state.object_history[-8:]):
             st.write(f"**{detection['time']}** - {detection['object']}: *{detection['message']}*")
 
+else:
+    st.info("🟢 **MANUAL MODE** - Enable auto-detection for continuous monitoring")
+
 # --------------------------------------------------
 # Real-time Dashboard
 # --------------------------------------------------
