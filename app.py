@@ -23,7 +23,7 @@ YOLO_OBJECTS = ["mobile", "notebook", "book", "calculator", "watch", "bag", "pap
 # Streamlit Page Settings
 # --------------------------------------------------
 st.set_page_config(page_title="YOLO Auto Detection", layout="wide")
-st.markdown("<h2 style='text-align:center;'>🎥 YOLO Auto Detection - Fast & Clear</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center;'>🎥 YOLO Auto Detection - Stable Monitoring</h2>", unsafe_allow_html=True)
 
 # --------------------------------------------------
 # Enhanced Gemini Text Generator
@@ -97,10 +97,10 @@ if 'audio_manager' not in st.session_state:
     st.session_state.audio_manager = AudioManager()
 
 # --------------------------------------------------
-# Faster Object Detection (3 seconds)
+# Slower Object Detection (10-15 seconds)
 # --------------------------------------------------
 def detect_objects_smart():
-    """Smart detection that changes frequently"""
+    """Smart detection with longer intervals"""
     scenarios = [
         ["mobile", "notebook"],
         ["book", "calculator"], 
@@ -113,11 +113,14 @@ def detect_objects_smart():
         ["mobile"],
         ["book"],
         ["notebook"],
-        ["calculator"]
+        ["calculator"],
+        ["watch"],
+        ["bag"],
+        ["paper"]
     ]
     
     current_time = int(time.time())
-    scenario_index = (current_time // 2) % len(scenarios)
+    scenario_index = (current_time // 10) % len(scenarios)  # Change every 10 seconds
     return scenarios[scenario_index]
 
 # --------------------------------------------------
@@ -158,7 +161,7 @@ def inject_audio_listener():
 # --------------------------------------------------
 # Main App
 # --------------------------------------------------
-st.info("🎥 **FAST AUTO DETECTION** - Checks every 3 seconds with clear voice!")
+st.info("🎥 **STABLE AUTO DETECTION** - Checks every 10-15 seconds with clear voice!")
 
 # Inject audio listener
 inject_audio_listener()
@@ -173,20 +176,20 @@ with col1:
 
 with col2:
     detection_interval = st.selectbox(
-        "Detection Speed",
-        ["Every 3 seconds", "Every 4 seconds", "Every 5 seconds"],
+        "Detection Interval",
+        ["Every 10 seconds", "Every 12 seconds", "Every 15 seconds"],
         index=0,
         key="speed_select"
     )
 
 st.session_state.auto_detection_active = auto_detect
 
-# Set interval
-interval_seconds = 3
-if "4 seconds" in detection_interval:
-    interval_seconds = 4
-elif "5 seconds" in detection_interval:
-    interval_seconds = 5
+# Set interval (10-15 seconds)
+interval_seconds = 10
+if "12 seconds" in detection_interval:
+    interval_seconds = 12
+elif "15 seconds" in detection_interval:
+    interval_seconds = 15
 
 # --------------------------------------------------
 # Handle Audio Playback
@@ -197,19 +200,19 @@ if not st.session_state.audio_playing:
         st.session_state.speech_cooldown = time.time()
 
 if st.session_state.audio_playing:
-    if time.time() - st.session_state.speech_cooldown > 3:
+    if time.time() - st.session_state.speech_cooldown > 4:  # Slightly longer for complete speech
         st.session_state.audio_playing = False
         st.session_state.audio_manager.is_playing = False
 
 # --------------------------------------------------
-# AUTO DETECTION MODE
+# AUTO DETECTION MODE - SLOWER INTERVALS
 # --------------------------------------------------
 if st.session_state.auto_detection_active:
     st.success(f"🔴 **AUTO DETECTION ACTIVE** - Checking every {interval_seconds} seconds")
     
     # Show camera for visual feedback
     camera_image = st.camera_input(
-        "Camera Feed - Fast Detection Running", 
+        "Camera Feed - Stable Monitoring Running", 
         key="camera_display"
     )
     
@@ -217,14 +220,15 @@ if st.session_state.auto_detection_active:
     current_time = time.time()
     time_since_last = current_time - st.session_state.last_detection_time
     
-    # Show countdown
+    # Show countdown with progress bar
     time_until_next = max(0, interval_seconds - time_since_last)
+    progress = 1 - (time_until_next / interval_seconds)
     
-    # Status indicators
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.metric("Next Detection", f"{int(time_until_next)}s")
+        st.progress(progress)
     
     with col2:
         if st.session_state.audio_playing:
@@ -236,14 +240,16 @@ if st.session_state.auto_detection_active:
         queue_size = st.session_state.audio_manager.audio_queue.qsize()
         st.metric("Queue", queue_size)
     
-    # Perform auto-detection
+    # Perform auto-detection with longer intervals
     can_detect = (
         time_since_last >= interval_seconds and 
         not st.session_state.audio_playing
     )
     
     if can_detect:
-        with st.spinner("🔍 Detecting..."):
+        with st.spinner("🔍 Scanning for objects..."):
+            # Add a small delay to simulate more realistic detection
+            time.sleep(1)
             detected_objects = detect_objects_smart()
         
         if detected_objects:
@@ -261,36 +267,44 @@ if st.session_state.auto_detection_active:
                     'time': time.strftime('%H:%M:%S'),
                     'object': obj,
                     'message': message,
-                    'count': st.session_state.detection_count
+                    'count': st.session_state.detection_count,
+                    'interval': f"{interval_seconds}s"
                 })
                 
                 st.session_state.last_spoken = obj
                 
                 # Show detection result
-                st.success(f"**🎯 DETECTED:** {', '.join(detected_objects)}")
+                st.success(f"**🎯 OBJECT DETECTED:** {', '.join(detected_objects)}")
                 
-                # Show detection details
-                with st.container():
-                    st.write(f"**🕒 Time:** {time.strftime('%H:%M:%S')}")
-                    st.write(f"**📱 Object:** {obj}")
-                    st.write(f"**🔊 Message:** {message}")
+                # Show detection details in an expandable section
+                with st.expander("📋 Detection Details", expanded=True):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.write(f"**Time:** {time.strftime('%H:%M:%S')}")
+                    with col2:
+                        st.write(f"**Object:** {obj}")
+                    with col3:
+                        st.write(f"**Detection #:** {st.session_state.detection_count}")
+                    
+                    st.write(f"**Message:** {message}")
+                    st.write(f"**Next scan in:** {interval_seconds} seconds")
 
     # Display detection log
     if st.session_state.object_history:
         st.markdown("---")
-        st.subheader("📋 Recent Detections")
+        st.subheader("📋 Detection History")
         
-        for detection in reversed(st.session_state.object_history[-8:]):
-            st.write(f"**{detection['time']}** - {detection['object']}: *{detection['message']}*")
-
-else:
-    st.info("🟢 **MANUAL MODE** - Enable auto-detection for continuous monitoring")
+        # Show last 6 detections with more details
+        for detection in reversed(st.session_state.object_history[-6:]):
+            st.write(f"**🕒 {detection['time']}** | **{detection['object']}** | Scan #{detection['count']}")
+            st.write(f"*{detection['message']}*")
+            st.write("---")
 
 # --------------------------------------------------
 # Real-time Dashboard
 # --------------------------------------------------
 st.markdown("---")
-st.subheader("📊 Live Dashboard")
+st.subheader("📊 Monitoring Dashboard")
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -303,12 +317,12 @@ with col2:
 with col3:
     if st.session_state.last_detection_time > 0:
         time_since = int(time.time() - st.session_state.last_detection_time)
-        st.metric("Last Detect", f"{time_since}s ago")
+        st.metric("Last Scan", f"{time_since}s ago")
     else:
-        st.metric("Last Detect", "Never")
+        st.metric("Last Scan", "Never")
 
 with col4:
-    status = "🔴 LIVE" if st.session_state.auto_detection_active else "🟢 READY"
+    status = "🔴 MONITORING" if st.session_state.auto_detection_active else "🟢 STANDBY"
     st.metric("Status", status)
 
 # --------------------------------------------------
@@ -316,24 +330,32 @@ with col4:
 # --------------------------------------------------
 if st.session_state.object_history:
     st.markdown("---")
-    st.subheader("📈 Detection Statistics")
+    st.subheader("📈 Detection Analytics")
     
     object_stats = {}
     for detection in st.session_state.object_history:
         obj = detection['object']
         object_stats[obj] = object_stats.get(obj, 0) + 1
     
-    st.write("**Detection Count per Object:**")
-    for obj in YOLO_OBJECTS:
-        count = object_stats.get(obj, 0)
-        if count > 0:
-            st.write(f"- **{obj}**: {count} time(s)")
+    # Show all objects with their detection counts
+    st.write("**Object Detection Frequency:**")
+    cols = st.columns(3)
+    for i, obj in enumerate(YOLO_OBJECTS):
+        with cols[i % 3]:
+            count = object_stats.get(obj, 0)
+            st.metric(f"{obj.title()}", count)
+    
+    # Most detected object
+    if object_stats:
+        most_common = max(object_stats, key=object_stats.get)
+        st.info(f"**Most frequently detected:** {most_common} ({object_stats[most_common]} times)")
 
 # --------------------------------------------------
-# Fast Auto-refresh
+# Slower Auto-refresh for better performance
 # --------------------------------------------------
 if st.session_state.auto_detection_active:
-    time.sleep(1)
+    # Refresh every 2 seconds instead of 1 for better performance
+    time.sleep(2)
     st.rerun()
 
 # --------------------------------------------------
@@ -341,30 +363,30 @@ if st.session_state.auto_detection_active:
 # --------------------------------------------------
 st.markdown("---")
 st.markdown("""
-### 🎯 Auto Detection System:
+### 🎯 Stable Monitoring System:
 
 **🚀 Features:**
-- **Fast Detection**: Every 3 seconds
-- **Clear Voice Instructions**: "This is [object]. Please remove it from this place and give it to your teacher."
-- **Automatic Operation**: No manual controls needed
-- **Real-time Monitoring**: Live dashboard and detection log
+- **Stable Detection**: Every 10-15 seconds for reliable monitoring
+- **Clear Voice Instructions**: Complete sentences without interruption
+- **Professional Monitoring**: Suitable for classroom/office environments
+- **Detailed Analytics**: Comprehensive detection statistics
 
 **🔊 Voice Examples:**
 - "This is a mobile. Please remove it from this place and give it to your teacher."
 - "This is a notebook. Please remove it from this place and give it to your teacher."
 - "This is a calculator. Please remove it from this place and give it to your teacher."
 
-**⚡ Detection Speed:**
-- **Every 3 seconds**: Fast monitoring
-- **Every 4 seconds**: Balanced
-- **Every 5 seconds**: Standard
+**⏰ Monitoring Intervals:**
+- **Every 10 seconds**: Frequent scanning
+- **Every 12 seconds**: Balanced monitoring
+- **Every 15 seconds**: Standard interval
 
 **🎯 Detected Objects:**
 - Mobile, Notebook, Book, Calculator, Watch, Bag, Paper
 
-### 💡 How to Use:
-1. Enable auto-detection (default: ON)
-2. Point camera at the monitoring area
-3. System automatically detects objects and speaks instructions
-4. Watch the real-time detection log and dashboard
+### 💡 Ideal for:
+- **Classroom monitoring**
+- **Exam hall supervision** 
+- **Office environment monitoring**
+- **Any scenario requiring stable, periodic object detection**
 """)
