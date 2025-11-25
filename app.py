@@ -1,4 +1,5 @@
-!pip install opencv-python-headless
+import os
+os.system("python -m pip install opencv-python-headless")
 import streamlit as st
 import cv2
 from ultralytics import YOLO
@@ -112,5 +113,6 @@ if start_camera:
 
     cap.release()
     st.stop()
+
 
 
