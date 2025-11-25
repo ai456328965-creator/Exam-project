@@ -102,14 +102,9 @@ if 'audio_manager' not in st.session_state:
 def detect_objects_smart():
     """Smart detection that changes frequently"""
     scenarios = [
-        ["mobile", "notebook"],
-        ["book", "calculator"], 
-        ["watch", "bag"],
-        ["paper", "mobile"],
-        ["notebook"],
-        ["book", "paper"],
-        ["bag", "mobile"],
-        ["calculator", "watch"],
+        ["paper"],
+        ["bag"],
+        ["watch"],
         ["mobile"],
         ["book"],
         ["notebook"],
@@ -404,4 +399,5 @@ st.markdown("""
 3. Listen for clear voice instructions every 3 seconds
 4. Watch real-time detection log
 """)
+
 
