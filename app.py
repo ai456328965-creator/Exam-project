@@ -318,20 +318,6 @@ with col2:
         st.session_state.audio_playing = False
         st.success("Queue cleared!")
 
-# --------------------------------------------------
-# Instant Voice Test for All Objects
-# --------------------------------------------------
-st.markdown("---")
-st.subheader("🔊 Voice Test - All Objects")
-
-# Create a grid of buttons
-cols = st.columns(4)
-for i, obj in enumerate(YOLO_OBJECTS):
-    with cols[i % 4]:
-        if st.button(f"📱 {obj.title()}", use_container_width=True, key=f"voice_{obj}"):
-            message = get_gemini_text(obj)
-            st.session_state.audio_manager.speak(message)
-            st.info(f"Testing: {obj}")
 
 # --------------------------------------------------
 # Real-time Dashboard
@@ -418,3 +404,4 @@ st.markdown("""
 3. Listen for clear voice instructions every 3 seconds
 4. Watch real-time detection log
 """)
+
